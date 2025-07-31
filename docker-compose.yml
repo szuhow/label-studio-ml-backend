@@ -8,10 +8,12 @@ services:
       context: .
       args:
         TEST_ENV: ${TEST_ENV}
-    runtime: nvidia
+    # GPU configuration - use --gpus all instead of runtime: nvidia
     environment:
       # NVIDIA GPU configuration
       - NVIDIA_VISIBLE_DEVICES=all
+      - CUDA_VISIBLE_DEVICES=0
+      - CUDA_LAUNCH_BLOCKING=1
       # specify these parameters if you want to use basic auth for the model server
       - BASIC_AUTH_USER=
       - BASIC_AUTH_PASS=

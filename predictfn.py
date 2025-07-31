@@ -1047,11 +1047,15 @@ def load_trained_model_for_inference(model_path, model_type=None, device=None):
     # Auto-detect device
     if device is None:
         print(f"Auto-detecting device...")
+        print(f"Environment variables:")
+        print(f"  CUDA_VISIBLE_DEVICES: {os.environ.get('CUDA_VISIBLE_DEVICES', 'Not set')}")
+        print(f"  NVIDIA_VISIBLE_DEVICES: {os.environ.get('NVIDIA_VISIBLE_DEVICES', 'Not set')}")
         print(f"CUDA available: {torch.cuda.is_available()}")
         if torch.cuda.is_available():
             device = torch.device("cuda")
             print(f"CUDA device count: {torch.cuda.device_count()}")
             print(f"CUDA device name: {torch.cuda.get_device_name(0)}")
+            print(f"CUDA version: {torch.version.cuda}")
         elif torch.backends.mps.is_available():
             device = torch.device("mps")
             print("MPS available, using MPS")

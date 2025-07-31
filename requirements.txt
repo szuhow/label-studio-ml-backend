@@ -1,4 +1,4 @@
-torch[torchvision] --index-url https://download.pytorch.org/whl/cu118
+torch[torchvision] --index-url https://download.pytorch.org/whl/cu121
 opencv-python
 pillow
 albumentations
