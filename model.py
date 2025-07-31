@@ -58,6 +58,14 @@ class CoronarySegmentationModel(LabelStudioMLBase):
         base_kwargs = {k: v for k, v in kwargs.items() if k not in model_specific_params}
         model_kwargs = {k: v for k, v in kwargs.items() if k in model_specific_params}
         
+        # Debug: sprawdź co jest w kwargs
+        logger.info(f"🔍 All kwargs keys: {list(kwargs.keys())}")
+        logger.info(f"🔍 Model specific params: {model_specific_params}")
+        logger.info(f"🔍 Base kwargs keys: {list(base_kwargs.keys())}")
+        logger.info(f"🔍 Model kwargs keys: {list(model_kwargs.keys())}")
+        if 'remove_frames' in kwargs:
+            logger.info(f"🔍 remove_frames value: {kwargs['remove_frames']} (type: {type(kwargs['remove_frames'])})")
+        
         # Wywołaj konstruktor klasy bazowej tylko z odpowiednimi parametrami
         super(CoronarySegmentationModel, self).__init__(**base_kwargs)
         

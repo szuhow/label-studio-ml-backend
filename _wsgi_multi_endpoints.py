@@ -163,7 +163,19 @@ def create_model_wrapper_class(model_name, model_config):
             logger.info(f"   model_config: {model_config}")
             
             # Połącz model_config z kwargs, gdzie model_config ma priorytet
-            merged_config = {**kwargs, **model_config}
+            # Ale usuń parametry specyficzne dla modelu z kwargs przekazywanych do klasy bazowej
+            model_specific_params = {
+                'model_path', 'model_type', 'resolution', 'threshold', 
+                'min_component_size', 'endpoint', 'description',
+                'smooth_mask_method', 'smooth_contour_method', 'polygon_detail_level',
+                'remove_frames'
+            }
+            
+            # Usuń parametry specyficzne dla modelu z kwargs
+            base_kwargs = {k: v for k, v in kwargs.items() if k not in model_specific_params}
+            
+            # Połącz base_kwargs z model_config
+            merged_config = {**base_kwargs, **model_config}
             logger.info(f"   merged_config: {merged_config}")
             
             super().__init__(**merged_config)
