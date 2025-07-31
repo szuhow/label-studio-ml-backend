@@ -269,7 +269,7 @@ def create_multi_endpoint_app(models_config, **flask_kwargs):
         
         # Funkcja tworząca view dla konkretnego modelu
         def create_model_view(app, name, ep):
-            def model_view(path=''):
+            def model_view(path='', app=app, name=name, ep=ep):  # zamrożenie argumentów
                 # Import dla każdego żądania
                 from flask import request as flask_request
                 
@@ -296,7 +296,6 @@ def create_multi_endpoint_app(models_config, **flask_kwargs):
                     except Exception as e:
                         logger.error(f"Error in model {name} at endpoint {ep}: {e}")
                         return jsonify({"error": str(e)}), 500
-            
             model_view.__name__ = f'{name}_view'
             return model_view
         
