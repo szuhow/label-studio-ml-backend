@@ -19,5 +19,5 @@
       "description": "ResUNet model trained at 512px resolution - high detail"
     }
   },
-  "default_model": "model_384_attention"
+  "default_model": "model_1_attention"
 }

@@ -90,4 +90,4 @@ COPY . .
 
 EXPOSE 9090
 
-CMD gunicorn --preload --bind :$PORT --workers $WORKERS --threads $THREADS --timeout 0 _wsgi_multi:app
+CMD gunicorn --preload --bind :$PORT --workers $WORKERS --threads $THREADS --timeout 0 _wsgi_multi_endpoints:app
