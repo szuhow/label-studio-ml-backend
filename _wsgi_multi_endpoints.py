@@ -200,7 +200,6 @@ def create_multi_endpoint_app(models_config, **flask_kwargs):
     
     # Dictionary przechowujący aplikacje dla poszczególnych modeli
     model_apps = {}
-    model_instances = {}
     
     # Twórz aplikacje dla każdego modelu
     for model_name, model_config in models.items():
@@ -226,9 +225,6 @@ def create_multi_endpoint_app(models_config, **flask_kwargs):
                 'endpoint': endpoint,
                 'config': model_config
             }
-            
-            # Stwórz instancję dla informacji
-            model_instances[model_name] = ModelWrapper()
             
             logger.info(f"✅ Model '{model_name}' initialized for endpoint '{endpoint}'")
             
