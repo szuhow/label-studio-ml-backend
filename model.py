@@ -537,28 +537,14 @@ class CoronarySegmentationModel(LabelStudioMLBase):
             if self.smooth_mask_method != 'none':
                 mask = self._smooth_mask(mask, method=self.smooth_mask_method, kernel_size=3)
             
-            # Dodatkowa separacja komponentów - usuń małe mosty między naczyniami
-            if CV2_AVAILABLE:
-                mask_uint8 = (mask * 255).astype(np.uint8)
-                
-                # Operacja morfologiczna - otwarcie aby usunąć cienkie połączenia
-                kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
-                mask_opened = cv2.morphologyEx(mask_uint8, cv2.MORPH_OPEN, kernel)
-                
-                # Zamknięcie aby wypełnić małe dziury w naczyniach
-                mask_closed = cv2.morphologyEx(mask_opened, cv2.MORPH_CLOSE, kernel)
-                
-                mask = (mask_closed / 255.0).astype(np.float32)
+
             
             if CV2_AVAILABLE:
                 # Użyj OpenCV do znajdowania konturów
                 mask_uint8 = (mask * 255).astype(np.uint8)
                 
-                # Użyj RETR_EXTERNAL aby znaleźć tylko zewnętrzne kontury
-                # To zapewni że każdy komponent będzie osobnym polygonem
+                # Użyj OpenCV do znajdowania konturów
                 contours, _ = cv2.findContours(mask_uint8, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-                
-                logger.info(f"Found {len(contours)} contours in mask")
                 
                 for contour in contours:
                     # Sprawdź czy kontur jest wystarczająco duży
@@ -651,6 +637,10 @@ class CoronarySegmentationModel(LabelStudioMLBase):
                             x_pct = float((x / original_width) * 100)
                             y_pct = float((y / original_height) * 100)
                             polygon_points.append([x_pct, y_pct])
+                            
+                            # Debug: sprawdź pierwszy punkt
+                            if len(polygon_points) == 1:
+                                logger.info(f"First polygon point: ({x}, {y}) -> ({x_pct:.2f}%, {y_pct:.2f}%)")
                         except Exception as point_error:
                             logger.warning(f"Error processing point {point}: {point_error}")
                             continue
@@ -658,7 +648,6 @@ class CoronarySegmentationModel(LabelStudioMLBase):
                     # Dodaj polygon tylko jeśli ma przynajmniej 3 punkty
                     if len(polygon_points) >= 3:
                         polygons.append(polygon_points)
-                        logger.info(f"Created polygon {len(polygons)} with {len(polygon_points)} points (detail level: {self.polygon_detail_level}, area: {area:.0f})")
                         
             else:
                 # Fallback - bounding box
@@ -682,7 +671,6 @@ class CoronarySegmentationModel(LabelStudioMLBase):
                     ]
                     polygons.append(polygon_points)
             
-            logger.info(f"Total polygons created: {len(polygons)}")
             return polygons
             
         except Exception as e:
@@ -759,6 +747,7 @@ class CoronarySegmentationModel(LabelStudioMLBase):
                 
                 # Przeskaluj maskę do oryginalnego rozmiaru obrazu
                 original_height, original_width = image.size[1], image.size[0]
+                logger.info(f"Scaling mask from {prediction_clean.shape} to ({original_width}, {original_height})")
                 
                 if CV2_AVAILABLE:
                     mask_resized = cv2.resize(
