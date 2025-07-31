@@ -81,8 +81,6 @@ RUN python3 -c "import cv2; print(f'OpenCV version: {cv2.__version__}')" || \
 RUN python3 -c "import torch; print(f'PyTorch version: {torch.__version__}')" || \
     (echo "PyTorch installation failed" && exit 1)
 
-COPY best_model.pth .
-
 COPY . .
 
 # Skopiuj model (jeśli istnieje lokalnie)

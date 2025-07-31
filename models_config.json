@@ -20,9 +20,9 @@
       "min_component_size": 250,
       "smooth_mask_method": "combined",
       "smooth_contour_method": "gaussian",
-      "polygon_detail_level": "ultra",
+      "polygon_detail_level": "maximum",
       "endpoint": "/model-2",
-      "description": "ResUNet model - advanced smoothing, ultra-high detail polygons"
+      "description": "ResUNet model - advanced smoothing, maximum detail polygons"
     },
       "model_3_enhanced": {
       "model_path": "/app/models/best_enhanced_unet_dice_64_25.pth",
@@ -30,8 +30,11 @@
       "resolution": 384,
       "threshold": 0.45,
       "min_component_size": 300,
+      "smooth_mask_method": "gaussian",
+      "smooth_contour_method": "approx",
+      "polygon_detail_level": "ultra",
       "endpoint": "/model-3",
-      "description": "Enhanced UNet model"
+      "description": "Enhanced UNet model - high detail polygons with minimal smoothing"
     }
   },
   "default_model": "model_1_attention"

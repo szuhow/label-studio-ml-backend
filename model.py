@@ -103,13 +103,6 @@ class CoronarySegmentationModel(LabelStudioMLBase):
         logger.info(f"  polygon_detail_level: {self.polygon_detail_level}")
         logger.info(f"  Environment MODEL_PATH: {os.getenv('MODEL_PATH', 'Not set')}")
         logger.info(f"  kwargs model_path: {model_kwargs.get('model_path', 'Not set')}")
-        logger.info(f"Model configuration:")
-        logger.info(f"  model_path: {self.model_path}")
-        logger.info(f"  model_type: {self.model_type}")
-        logger.info(f"  resolution: {self.resolution}")
-        logger.info(f"  threshold: {self.threshold}")
-        logger.info(f"  Environment MODEL_PATH: {os.getenv('MODEL_PATH', 'Not set')}")
-        logger.info(f"  kwargs model_path: {model_kwargs.get('model_path', 'Not set')}")
         
         # Inicjalizuj model
         self.model = None
@@ -536,46 +529,67 @@ class CoronarySegmentationModel(LabelStudioMLBase):
                     # Parametry aproksymacji na podstawie poziomu szczegółowości
                     if self.polygon_detail_level == 'ultra':
                         # Bardzo wysokie szczegóły - minimalna aproksymacja
-                        epsilon_factor = 0.0001
-                        max_points = 100
-                        min_points = 20
+                        epsilon_factor = 0.00005  # Jeszcze mniejsza aproksymacja
+                        max_points = 200  # Więcej punktów
+                        min_points = 30
+                        use_full_contour = True  # Użyj pełnego konturu
+                    elif self.polygon_detail_level == 'maximum':
+                        # Maksymalne szczegóły - prawie bez aproksymacji
+                        epsilon_factor = 0.00001  # Minimalna aproksymacja
+                        max_points = 500  # Bardzo dużo punktów
+                        min_points = 50
+                        use_full_contour = True
                     elif self.polygon_detail_level == 'high':
                         # Wysokie szczegóły
+                        epsilon_factor = 0.0002
+                        max_points = 100
+                        min_points = 20
+                        use_full_contour = True
+                    elif self.polygon_detail_level == 'medium':
+                        # Średnie szczegóły
                         epsilon_factor = 0.0005
                         max_points = 50
                         min_points = 15
-                    elif self.polygon_detail_level == 'medium':
-                        # Średnie szczegóły
-                        epsilon_factor = 0.001
-                        max_points = 30
-                        min_points = 10
+                        use_full_contour = False
                     else:  # 'low'
                         # Niskie szczegóły
-                        epsilon_factor = 0.002
-                        max_points = 20
-                        min_points = 6
+                        epsilon_factor = 0.001
+                        max_points = 30
+                        min_points = 8
+                        use_full_contour = False
+                    
+                    # Jeśli chcemy wysokie szczegóły, zacznij od pełnego konturu
+                    if use_full_contour:
+                        # Pobierz pełny kontur bez aproksymacji
+                        full_contours, _ = cv2.findContours(mask_uint8, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
+                        
+                        # Znajdź kontur odpowiadający obecnemu obszarowi
+                        for full_contour in full_contours:
+                            if abs(cv2.contourArea(full_contour) - area) < area * 0.1:  # 10% tolerancja
+                                contour = full_contour
+                                break
                     
                     # Wygładź kontur jeśli wymagane
                     if self.smooth_contour_method != 'none':
                         if self.smooth_contour_method == 'approx':
                             contour = self._smooth_contour(contour, method='approx', epsilon_factor=epsilon_factor)
                         elif self.smooth_contour_method == 'gaussian':
-                            contour = self._smooth_contour(contour, method='gaussian', window_size=5)
+                            contour = self._smooth_contour(contour, method='gaussian', window_size=3)
                     
-                    # Jeśli kontur ma za mało punktów, użyj próbkowanie z oryginalnego konturu
-                    if len(contour) < min_points:
-                        # Równomierne próbkowanie oryginalnego konturu
-                        original_contours, _ = cv2.findContours(mask_uint8, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
-                        for orig_contour in original_contours:
-                            if cv2.contourArea(orig_contour) == area:  # Znajdź odpowiadający kontur
-                                step = max(1, len(orig_contour) // max_points)
-                                contour = orig_contour[::step]
-                                break
-                    
-                    # Ogranicz liczbę punktów jeśli za dużo
+                    # Równomierne próbkowanie jeśli za dużo punktów
                     if len(contour) > max_points:
+                        # Równomiernie próbkuj kontury zachowując naturalne kształty
                         step = len(contour) // max_points
                         contour = contour[::step]
+                    
+                    # Jeśli nadal za mało punktów, dodaj więcej z oryginalnego konturu
+                    if len(contour) < min_points and use_full_contour:
+                        # Próbkuj gęściej z pełnego konturu
+                        step = max(1, len(contour) // min_points)
+                        contour = contour[::step]
+                    
+                    # Debug: zapisz statystyki punktów
+                    logger.debug(f"Polygon stats - Points: {len(contour)}, Detail level: {self.polygon_detail_level}, Area: {area:.0f}, Max points: {max_points}")
                     
                     # Konwertuj na listę punktów w procentach
                     polygon_points = []
