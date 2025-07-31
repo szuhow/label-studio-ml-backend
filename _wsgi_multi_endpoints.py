@@ -258,11 +258,16 @@ def create_multi_endpoint_app(models_config, **flask_kwargs):
         model_app = model_data['app']
         endpoint = model_data['endpoint']
         
+        logger.info(f"🔗 Setting up routing: Model '{model_name}' -> endpoint '{endpoint}'")
+        
         # Funkcja tworząca view dla konkretnego modelu
         def create_model_view(app, name, ep):
             def model_view(path=''):
                 # Import dla każdego żądania
                 from flask import request as flask_request
+                
+                # Debug routing info
+                logger.info(f"🔄 Routing request to model: {name}, endpoint: {ep}, path: {flask_request.path}")
                 
                 # Przygotuj ścieżkę dla przekierowania
                 new_path = flask_request.path.replace(ep.rstrip('/'), '') or '/'
