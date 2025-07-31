@@ -382,9 +382,10 @@ class CoronarySegmentationModel(LabelStudioMLBase):
                 # Konwertuj na uint8
                 mask_uint8 = (mask * 255).astype(np.uint8)
                 
-                # Znajdź komponenty połączone
+                # Użyj 4-połączeniowej analizy dla lepszej separacji komponentów
+                # To pomoże rozdzielić naczynia które są blisko siebie ale nie połączone
                 num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(
-                    mask_uint8, connectivity=8
+                    mask_uint8, connectivity=4
                 )
                 
                 # Stwórz nową pustą maskę
@@ -395,6 +396,7 @@ class CoronarySegmentationModel(LabelStudioMLBase):
                     if stats[i, cv2.CC_STAT_AREA] >= min_size:
                         mask_cleaned[labels == i] = 1
                 
+                logger.info(f"Component removal: {num_labels-1} components found, kept {sum(1 for i in range(1, num_labels) if stats[i, cv2.CC_STAT_AREA] >= min_size)}")
                 return mask_cleaned
             else:
                 # Brak OpenCV - zwróć oryginalną maskę
@@ -535,10 +537,28 @@ class CoronarySegmentationModel(LabelStudioMLBase):
             if self.smooth_mask_method != 'none':
                 mask = self._smooth_mask(mask, method=self.smooth_mask_method, kernel_size=3)
             
+            # Dodatkowa separacja komponentów - usuń małe mosty między naczyniami
+            if CV2_AVAILABLE:
+                mask_uint8 = (mask * 255).astype(np.uint8)
+                
+                # Operacja morfologiczna - otwarcie aby usunąć cienkie połączenia
+                kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+                mask_opened = cv2.morphologyEx(mask_uint8, cv2.MORPH_OPEN, kernel)
+                
+                # Zamknięcie aby wypełnić małe dziury w naczyniach
+                mask_closed = cv2.morphologyEx(mask_opened, cv2.MORPH_CLOSE, kernel)
+                
+                mask = (mask_closed / 255.0).astype(np.float32)
+            
             if CV2_AVAILABLE:
                 # Użyj OpenCV do znajdowania konturów
                 mask_uint8 = (mask * 255).astype(np.uint8)
+                
+                # Użyj RETR_EXTERNAL aby znaleźć tylko zewnętrzne kontury
+                # To zapewni że każdy komponent będzie osobnym polygonem
                 contours, _ = cv2.findContours(mask_uint8, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+                
+                logger.info(f"Found {len(contours)} contours in mask")
                 
                 for contour in contours:
                     # Sprawdź czy kontur jest wystarczająco duży
@@ -638,7 +658,7 @@ class CoronarySegmentationModel(LabelStudioMLBase):
                     # Dodaj polygon tylko jeśli ma przynajmniej 3 punkty
                     if len(polygon_points) >= 3:
                         polygons.append(polygon_points)
-                        logger.info(f"Created polygon with {len(polygon_points)} points (detail level: {self.polygon_detail_level})")
+                        logger.info(f"Created polygon {len(polygons)} with {len(polygon_points)} points (detail level: {self.polygon_detail_level}, area: {area:.0f})")
                         
             else:
                 # Fallback - bounding box
@@ -662,6 +682,7 @@ class CoronarySegmentationModel(LabelStudioMLBase):
                     ]
                     polygons.append(polygon_points)
             
+            logger.info(f"Total polygons created: {len(polygons)}")
             return polygons
             
         except Exception as e:

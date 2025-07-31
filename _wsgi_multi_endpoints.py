@@ -211,9 +211,12 @@ def create_multi_endpoint_app(models_config, **flask_kwargs):
             ModelWrapper = create_model_wrapper_class(model_name, model_config)
             
             # Stwórz aplikację Label Studio ML dla tego modelu
+            # Usuń remove_frames z flask_kwargs jeśli istnieje
+            flask_kwargs_clean = {k: v for k, v in flask_kwargs.items() if k != 'remove_frames'}
+            
             model_app = init_app(
                 model_class=ModelWrapper,
-                **flask_kwargs
+                **flask_kwargs_clean
             )
             
             logger.info(f"🔍 Created Flask app for {model_name}: {model_app}")

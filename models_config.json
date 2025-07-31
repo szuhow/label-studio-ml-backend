@@ -22,9 +22,9 @@
       "smooth_mask_method": "combined",
       "smooth_contour_method": "gaussian",
       "polygon_detail_level": "maximum",
-      "remove_frames": true,
+      "remove_frames": false,
       "endpoint": "/model-2",
-      "description": "ResUNet model - advanced smoothing, maximum detail polygons with frame removal"
+      "description": "ResUNet model - advanced smoothing, maximum detail polygons"
     },
       "model_3_enhanced": {
       "model_path": "/app/models/best_enhanced_unet_dice_64_25.pth",
@@ -35,7 +35,7 @@
       "smooth_mask_method": "gaussian",
       "smooth_contour_method": "approx",
       "polygon_detail_level": "ultra",
-      "remove_frames": true,
+      "remove_frames": false,
       "endpoint": "/model-3",
       "description": "Enhanced UNet model - high detail polygons with minimal smoothing"
     }
