@@ -50,7 +50,7 @@ class CoronarySegmentationModel(LabelStudioMLBase):
         model_specific_params = {
             'model_path', 'model_type', 'resolution', 'threshold', 
             'min_component_size', 'endpoint', 'description',
-            'smooth_mask_method', 'smooth_contour_method'
+            'smooth_mask_method', 'smooth_contour_method', 'polygon_detail_level'
         }
         
         # Podziel kwargs na te dla klasy bazowej i te dla naszego modelu
@@ -87,7 +87,22 @@ class CoronarySegmentationModel(LabelStudioMLBase):
         self.threshold = model_kwargs.get('threshold') or float(os.getenv('THRESHOLD', '0.5'))
         self.min_component_size = model_kwargs.get('min_component_size') or int(os.getenv('MIN_COMPONENT_SIZE', '300'))
         
+        # Nowe parametry wygładzania
+        self.smooth_mask_method = model_kwargs.get('smooth_mask_method') or os.getenv('SMOOTH_MASK_METHOD', 'morphology')
+        self.smooth_contour_method = model_kwargs.get('smooth_contour_method') or os.getenv('SMOOTH_CONTOUR_METHOD', 'approx')
+        self.polygon_detail_level = model_kwargs.get('polygon_detail_level') or os.getenv('POLYGON_DETAIL_LEVEL', 'high')  # 'low', 'medium', 'high', 'ultra'
+        
         # Debug info
+        logger.info(f"Model configuration:")
+        logger.info(f"  model_path: {self.model_path}")
+        logger.info(f"  model_type: {self.model_type}")
+        logger.info(f"  resolution: {self.resolution}")
+        logger.info(f"  threshold: {self.threshold}")
+        logger.info(f"  smooth_mask_method: {self.smooth_mask_method}")
+        logger.info(f"  smooth_contour_method: {self.smooth_contour_method}")
+        logger.info(f"  polygon_detail_level: {self.polygon_detail_level}")
+        logger.info(f"  Environment MODEL_PATH: {os.getenv('MODEL_PATH', 'Not set')}")
+        logger.info(f"  kwargs model_path: {model_kwargs.get('model_path', 'Not set')}")
         logger.info(f"Model configuration:")
         logger.info(f"  model_path: {self.model_path}")
         logger.info(f"  model_type: {self.model_type}")
@@ -377,9 +392,119 @@ class CoronarySegmentationModel(LabelStudioMLBase):
             logger.warning(f"Error in component removal: {e}, returning original mask")
             return mask.astype(np.uint8)
     
+    def _smooth_mask(self, mask: np.ndarray, method='gaussian', **kwargs) -> np.ndarray:
+        """
+        Wygładza maskę segmentacji dla uzyskania gładszych konturów
+        
+        Args:
+            mask: Maska binarna (0-1)
+            method: Metoda wygładzania ('gaussian', 'morphology', 'bilateral', 'combined')
+            **kwargs: Dodatkowe parametry dla metod
+        
+        Returns:
+            Wygładzona maska
+        """
+        if not CV2_AVAILABLE:
+            return mask
+            
+        mask_uint8 = (mask * 255).astype(np.uint8)
+        
+        if method == 'gaussian':
+            kernel_size = kwargs.get('kernel_size', 5)
+            sigma = kwargs.get('sigma', 1.0)
+            # Gaussian blur
+            smoothed = cv2.GaussianBlur(mask_uint8, (kernel_size, kernel_size), sigma)
+            # Ponowna binaryzacja
+            _, smoothed = cv2.threshold(smoothed, 127, 255, cv2.THRESH_BINARY)
+            
+        elif method == 'morphology':
+            # Operacje morfologiczne - zamknięcie + otwarcie
+            kernel_size = kwargs.get('kernel_size', 3)
+            iterations = kwargs.get('iterations', 1)
+            
+            kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (kernel_size, kernel_size))
+            # Zamknięcie (closing) - wypełnia małe dziury
+            smoothed = cv2.morphologyEx(mask_uint8, cv2.MORPH_CLOSE, kernel, iterations=iterations)
+            # Otwarcie (opening) - usuwa małe szumy
+            smoothed = cv2.morphologyEx(smoothed, cv2.MORPH_OPEN, kernel, iterations=iterations)
+            
+        elif method == 'bilateral':
+            # Bilateral filter - zachowuje krawędzie ale wygładza
+            d = kwargs.get('d', 9)
+            sigma_color = kwargs.get('sigma_color', 75)
+            sigma_space = kwargs.get('sigma_space', 75)
+            
+            smoothed = cv2.bilateralFilter(mask_uint8, d, sigma_color, sigma_space)
+            _, smoothed = cv2.threshold(smoothed, 127, 255, cv2.THRESH_BINARY)
+            
+        elif method == 'combined':
+            # Kombinacja metod dla najlepszego efektu
+            kernel_size = kwargs.get('kernel_size', 3)
+            
+            # 1. Morfologia do wypełnienia dziur
+            kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (kernel_size, kernel_size))
+            smoothed = cv2.morphologyEx(mask_uint8, cv2.MORPH_CLOSE, kernel, iterations=1)
+            
+            # 2. Gaussian blur dla wygładzenia
+            smoothed = cv2.GaussianBlur(smoothed, (5, 5), 1.0)
+            
+            # 3. Ponowna binaryzacja
+            _, smoothed = cv2.threshold(smoothed, 127, 255, cv2.THRESH_BINARY)
+            
+        else:
+            smoothed = mask_uint8
+            
+        return (smoothed / 255.0).astype(np.float32)
+
+    def _smooth_contour(self, contour: np.ndarray, method='approx', **kwargs) -> np.ndarray:
+        """
+        Wygładza pojedynczy kontur
+        
+        Args:
+            contour: Kontur z OpenCV
+            method: Metoda wygładzania ('approx', 'gaussian')
+            **kwargs: Dodatkowe parametry
+            
+        Returns:
+            Wygładzony kontur
+        """
+        if not CV2_AVAILABLE or len(contour) < 3:
+            return contour
+            
+        if method == 'approx':
+            # Aproksymacja Douglas-Peucker z dostrojoną dokładnością
+            epsilon_factor = kwargs.get('epsilon_factor', 0.001)  # Mniejsza wartość = więcej szczegółów
+            epsilon = epsilon_factor * cv2.arcLength(contour, True)
+            approx = cv2.approxPolyDP(contour, epsilon, True)
+            return approx
+            
+        elif method == 'gaussian':
+            # Proste wygładzenie przez uśrednienie punktów sąsiadujących
+            window_size = kwargs.get('window_size', 3)
+            if window_size < 3:
+                return contour
+                
+            contour_2d = contour.reshape(-1, 2).astype(np.float32)
+            n_points = len(contour_2d)
+            smoothed_points = np.zeros_like(contour_2d)
+            
+            for i in range(n_points):
+                # Zbierz punkty w oknie
+                window_points = []
+                for j in range(-window_size//2, window_size//2 + 1):
+                    idx = (i + j) % n_points  # Circular indexing
+                    window_points.append(contour_2d[idx])
+                
+                # Uśrednij
+                smoothed_points[i] = np.mean(window_points, axis=0)
+            
+            return smoothed_points.astype(np.int32).reshape(-1, 1, 2)
+            
+        return contour
+    
     def _mask_to_polygons(self, mask: np.ndarray, original_width: int, original_height: int, min_area: int = 100) -> List[List[List[float]]]:
         """
-        Konwertuj maskę binarną na listę polygonów z wygładzaniem
+        Konwertuj maskę binarną na listę polygonów z zaawansowanym wygładzaniem
         
         Args:
             mask: Binarna maska (0 i 1)
@@ -393,6 +518,10 @@ class CoronarySegmentationModel(LabelStudioMLBase):
         try:
             polygons = []
             
+            # Wygładź maskę przed znajdowaniem konturów
+            if self.smooth_mask_method != 'none':
+                mask = self._smooth_mask(mask, method=self.smooth_mask_method, kernel_size=3)
+            
             if CV2_AVAILABLE:
                 # Użyj OpenCV do znajdowania konturów
                 mask_uint8 = (mask * 255).astype(np.uint8)
@@ -404,19 +533,53 @@ class CoronarySegmentationModel(LabelStudioMLBase):
                     if area < min_area:
                         continue
                     
-                    # Bardziej agresywne wygładzanie - mniejszy epsilon dla więcej szczegółów
-                    epsilon = 0.0005 * cv2.arcLength(contour, True)  # 0.05% zamiast 0.2%
-                    approx = cv2.approxPolyDP(contour, epsilon, True)
+                    # Parametry aproksymacji na podstawie poziomu szczegółowości
+                    if self.polygon_detail_level == 'ultra':
+                        # Bardzo wysokie szczegóły - minimalna aproksymacja
+                        epsilon_factor = 0.0001
+                        max_points = 100
+                        min_points = 20
+                    elif self.polygon_detail_level == 'high':
+                        # Wysokie szczegóły
+                        epsilon_factor = 0.0005
+                        max_points = 50
+                        min_points = 15
+                    elif self.polygon_detail_level == 'medium':
+                        # Średnie szczegóły
+                        epsilon_factor = 0.001
+                        max_points = 30
+                        min_points = 10
+                    else:  # 'low'
+                        # Niskie szczegóły
+                        epsilon_factor = 0.002
+                        max_points = 20
+                        min_points = 6
                     
-                    # Jeśli nadal za mało punktów, użyj oryginalny kontur z próbkowaniem
-                    if len(approx) < 8:  # Jeśli bardzo prosty, użyj więcej punktów
-                        # Pobierz co n-ty punkt z oryginalnego konturu
-                        step = max(1, len(contour) // 20)  # Max 20 punktów
-                        approx = contour[::step]
+                    # Wygładź kontur jeśli wymagane
+                    if self.smooth_contour_method != 'none':
+                        if self.smooth_contour_method == 'approx':
+                            contour = self._smooth_contour(contour, method='approx', epsilon_factor=epsilon_factor)
+                        elif self.smooth_contour_method == 'gaussian':
+                            contour = self._smooth_contour(contour, method='gaussian', window_size=5)
+                    
+                    # Jeśli kontur ma za mało punktów, użyj próbkowanie z oryginalnego konturu
+                    if len(contour) < min_points:
+                        # Równomierne próbkowanie oryginalnego konturu
+                        original_contours, _ = cv2.findContours(mask_uint8, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
+                        for orig_contour in original_contours:
+                            if cv2.contourArea(orig_contour) == area:  # Znajdź odpowiadający kontur
+                                step = max(1, len(orig_contour) // max_points)
+                                contour = orig_contour[::step]
+                                break
+                    
+                    # Ogranicz liczbę punktów jeśli za dużo
+                    if len(contour) > max_points:
+                        step = len(contour) // max_points
+                        contour = contour[::step]
                     
                     # Konwertuj na listę punktów w procentach
                     polygon_points = []
-                    for point in approx:
+                    for point in contour:
                         try:
                             # Bezpieczne rozpakowywanie punktów OpenCV
                             if len(point.shape) == 3 and point.shape[0] == 1:  # Format (1, 2) z OpenCV
@@ -441,6 +604,7 @@ class CoronarySegmentationModel(LabelStudioMLBase):
                     # Dodaj polygon tylko jeśli ma przynajmniej 3 punkty
                     if len(polygon_points) >= 3:
                         polygons.append(polygon_points)
+                        logger.info(f"Created polygon with {len(polygon_points)} points (detail level: {self.polygon_detail_level})")
                         
             else:
                 # Fallback - bounding box

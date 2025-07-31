@@ -138,6 +138,9 @@ def auto_discover_models(models_dir):
             "resolution": resolution,
             "threshold": 0.5,
             "min_component_size": 300,
+            "smooth_mask_method": "morphology",
+            "smooth_contour_method": "approx", 
+            "polygon_detail_level": "high",
             "endpoint": endpoint,
             "description": f"Auto-discovered: {model_name}"
         }

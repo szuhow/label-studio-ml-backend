@@ -8,8 +8,9 @@
       "min_component_size": 300,
       "smooth_mask_method": "morphology",
       "smooth_contour_method": "approx",
+      "polygon_detail_level": "high",
       "endpoint": "/model-1",
-      "description": "Attention ResUNet model trained at 384px resolution - main model (with smoothing)"
+      "description": "Attention ResUNet model - basic smoothing, high detail polygons"
     },
     "model_2_attention": {
       "model_path": "/app/models/best_model.pth",
@@ -19,8 +20,9 @@
       "min_component_size": 250,
       "smooth_mask_method": "combined",
       "smooth_contour_method": "gaussian",
+      "polygon_detail_level": "ultra",
       "endpoint": "/model-2",
-      "description": "ResUNet model (with advanced smoothing)"
+      "description": "ResUNet model - advanced smoothing, ultra-high detail polygons"
     },
       "model_3_enhanced": {
       "model_path": "/app/models/best_enhanced_unet_dice_64_25.pth",
