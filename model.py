@@ -251,12 +251,21 @@ class CoronarySegmentationModel(LabelStudioMLBase):
             # Sprawdź czy plik istnieje
             if os.path.exists(self.model_path):
                 logger.info(f"Model file found, loading...")
+                
+                # Sprawdź dostępność GPU przed ładowaniem modelu
+                import torch
+                logger.info(f"CUDA available: {torch.cuda.is_available()}")
+                if torch.cuda.is_available():
+                    logger.info(f"CUDA device count: {torch.cuda.device_count()}")
+                    logger.info(f"CUDA device name: {torch.cuda.get_device_name(0)}")
+                
                 self.model, self.device = load_trained_model_for_inference(
                     self.model_path, 
                     self.model_type
                 )
                 logger.info(f"Model loaded successfully from {self.model_path}")
                 logger.info(f"Device: {self.device}")
+                logger.info(f"Model device: {next(self.model.parameters()).device if self.model else 'No model'}")
             else:
                 logger.warning(f"Model file not found: {self.model_path}")
                 

@@ -1046,12 +1046,18 @@ def load_trained_model_for_inference(model_path, model_type=None, device=None):
 
     # Auto-detect device
     if device is None:
+        print(f"Auto-detecting device...")
+        print(f"CUDA available: {torch.cuda.is_available()}")
         if torch.cuda.is_available():
             device = torch.device("cuda")
+            print(f"CUDA device count: {torch.cuda.device_count()}")
+            print(f"CUDA device name: {torch.cuda.get_device_name(0)}")
         elif torch.backends.mps.is_available():
             device = torch.device("mps")
+            print("MPS available, using MPS")
         else:
             device = torch.device("cpu")
+            print("No GPU available, using CPU")
 
     print(f"Loading model on: {device}")
 
@@ -1099,9 +1105,13 @@ def inference_single_image(model, image_tensor, device, threshold=0.5):
 
     with torch.no_grad():
         # Przenieś na device
+        print(f"Moving input tensor to device: {device}")
         image_tensor = image_tensor.to(device)
+        print(f"Input tensor device: {image_tensor.device}")
+        print(f"Model device: {next(model.parameters()).device}")
 
         # Forward pass
+        print(f"Running inference on device: {device}")
         output = model(image_tensor)
 
         # Sigmoid dla prawdopodobieństw

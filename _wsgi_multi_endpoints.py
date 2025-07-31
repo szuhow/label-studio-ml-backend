@@ -262,61 +262,46 @@ def create_multi_endpoint_app(models_config, **flask_kwargs):
     
     # Routing dla każdego modelu
     for model_name, model_data in model_apps.items():
-        model_app = model_data['app']
+        model_app_instance = model_data['app']
         endpoint = model_data['endpoint']
         
         logger.info(f"🔗 Setting up routing: Model '{model_name}' -> endpoint '{endpoint}'")
         
-        # Funkcja tworząca view dla konkretnego modelu
-        def create_model_view(app, name, ep):
-            def model_view(path='', app=app, name=name, ep=ep):  # zamrożenie argumentów
-                # Import dla każdego żądania
-                from flask import request as flask_request
-                
-                # Debug routing info
-                logger.info(f"🔄 Routing request to model: {name}, endpoint: {ep}, path: {flask_request.path}")
-                
-                # Przygotuj ścieżkę dla przekierowania
-                new_path = flask_request.path.replace(ep.rstrip('/'), '') or '/'
-                
-                # Skopiuj nagłówki do zwykłego dict aby uniknąć problemu z EnvironHeaders
-                headers_dict = dict(flask_request.headers)
-                
-                # Przekieruj całe żądanie do odpowiedniej aplikacji modelu
-                with app.test_request_context(
-                    path=new_path,
-                    method=flask_request.method,
-                    headers=headers_dict,
-                    data=flask_request.get_data(),
-                    query_string=flask_request.query_string
-                ):
-                    try:
-                        response = app.full_dispatch_request()
-                        return response
-                    except Exception as e:
-                        logger.error(f"Error in model {name} at endpoint {ep}: {e}")
-                        return jsonify({"error": str(e)}), 500
-            model_view.__name__ = f'{name}_view'
-            return model_view
+        # Define the model_view function directly inside the loop
+        # This ensures that 'model_app_instance', 'model_name', and 'endpoint'
+        # are correctly captured for each iteration.
+        def model_view_closure(path='', current_model_app=model_app_instance, current_model_name=model_name, current_endpoint=endpoint):
+            from flask import request as flask_request
+            
+            logger.info(f"🔄 Routing request to model: {current_model_name}, endpoint: {current_endpoint}, path: {flask_request.path}")
+            
+            new_path = flask_request.path.replace(current_endpoint.rstrip('/'), '') or '/'
+            headers_dict = dict(flask_request.headers)
+            
+            with current_model_app.test_request_context(
+                path=new_path,
+                method=flask_request.method,
+                headers=headers_dict,
+                data=flask_request.get_data(),
+                query_string=flask_request.query_string
+            ):
+                try:
+                    response = current_model_app.full_dispatch_request()
+                    return response
+                except Exception as e:
+                    logger.error(f"Error in model {current_model_name} at endpoint {current_endpoint}: {e}")
+                    return jsonify({"error": str(e)}), 500
+        
+        model_view_closure.__name__ = f'{model_name}_view'  # Set a unique name for Flask
         
         # Dodaj reguły routingu
         if endpoint == "/":
-            # Główny endpoint
-            app.add_url_rule('/', f'model_{model_name}_root', 
-                           create_model_view(model_app, model_name, endpoint), 
-                           methods=['GET', 'POST'])
-            app.add_url_rule('/<path:path>', f'model_{model_name}_path', 
-                           create_model_view(model_app, model_name, endpoint), 
-                           methods=['GET', 'POST'])
+            app.add_url_rule('/', f'model_{model_name}_root', model_view_closure, methods=['GET', 'POST'])
+            app.add_url_rule('/<path:path>', f'model_{model_name}_path', model_view_closure, methods=['GET', 'POST'])
         else:
-            # Dodatkowe endpointy
             endpoint_clean = endpoint.rstrip('/')
-            app.add_url_rule(f'{endpoint_clean}', f'model_{model_name}_root', 
-                           create_model_view(model_app, model_name, endpoint), 
-                           methods=['GET', 'POST'])
-            app.add_url_rule(f'{endpoint_clean}/<path:path>', f'model_{model_name}_path', 
-                           create_model_view(model_app, model_name, endpoint), 
-                           methods=['GET', 'POST'])
+            app.add_url_rule(f'{endpoint_clean}', f'model_{model_name}_root', model_view_closure, methods=['GET', 'POST'])
+            app.add_url_rule(f'{endpoint_clean}/<path:path>', f'model_{model_name}_path', model_view_closure, methods=['GET', 'POST'])
     
     return app
 
