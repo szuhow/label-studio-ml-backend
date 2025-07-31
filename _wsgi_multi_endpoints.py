@@ -107,14 +107,22 @@ def auto_discover_models(models_dir):
     for i, model_file in enumerate(model_files):
         model_name = model_file.stem
         
-        model_type = 'attention_resunet'
-        if 'unet' in model_name.lower():
-            if 'attention' in model_name.lower():
-                model_type = 'attention_resunet'
-            elif 'resunet' in model_name.lower():
-                model_type = 'resunet'
-            else:
-                model_type = 'unet'
+        # Rozpoznaj typ modelu na podstawie nazwy pliku
+        model_type = 'attention_resunet'  # domyślny
+        name_lower = model_name.lower()
+        
+        if 'deep_resunet' in name_lower or 'deepresunet' in name_lower:
+            model_type = 'deep_resunet'
+        elif 'attention_resunet' in name_lower or 'attentionresunet' in name_lower or 'attention' in name_lower:
+            model_type = 'attention_resunet'
+        elif 'resunetpp' in name_lower or 'resunet++' in name_lower or 'resunetplusplus' in name_lower:
+            model_type = 'resunetpp'
+        elif 'resunet' in name_lower:
+            model_type = 'resunet'
+        elif 'enhanced_unet' in name_lower or 'enhancedunet' in name_lower:
+            model_type = 'enhanced_unet'
+        elif 'unet' in name_lower:
+            model_type = 'unet'
         
         resolution = 384
         for res in [256, 320, 384, 512, 640]:

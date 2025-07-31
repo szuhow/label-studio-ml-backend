@@ -6,17 +6,30 @@
       "resolution": 384,
       "threshold": 0.5,
       "min_component_size": 300,
+      "smooth_mask_method": "morphology",
+      "smooth_contour_method": "approx",
       "endpoint": "/model-1",
-      "description": "Attention ResUNet model trained at 384px resolution - main model"
+      "description": "Attention ResUNet model trained at 384px resolution - main model (with smoothing)"
     },
     "model_2_attention": {
       "model_path": "/app/models/best_model.pth",
       "model_type": "attention_resunet",
-      "resolution": 512,
+      "resolution": 384,
       "threshold": 0.45,
       "min_component_size": 250,
+      "smooth_mask_method": "combined",
+      "smooth_contour_method": "gaussian",
       "endpoint": "/model-2",
-      "description": "ResUNet model trained at 512px resolution - high detail"
+      "description": "ResUNet model (with advanced smoothing)"
+    },
+      "model_3_enhanced": {
+      "model_path": "/app/models/best_enhanced_unet_dice_64_25.pth",
+      "model_type": "enhanced_unet",
+      "resolution": 384,
+      "threshold": 0.45,
+      "min_component_size": 300,
+      "endpoint": "/model-3",
+      "description": "Enhanced UNet model"
     }
   },
   "default_model": "model_1_attention"

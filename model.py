@@ -49,7 +49,8 @@ class CoronarySegmentationModel(LabelStudioMLBase):
         # Wydziel parametry specyficzne dla naszego modelu przed wywołaniem super().__init__()
         model_specific_params = {
             'model_path', 'model_type', 'resolution', 'threshold', 
-            'min_component_size', 'endpoint', 'description'
+            'min_component_size', 'endpoint', 'description',
+            'smooth_mask_method', 'smooth_contour_method'
         }
         
         # Podziel kwargs na te dla klasy bazowej i te dla naszego modelu
