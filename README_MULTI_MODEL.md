@@ -2,17 +2,25 @@
 
 ## Obsługa wielu modeli .pth
 
-Ten backend został rozszerzony o możliwość obsługi **wielu modeli PyTorch (.pth)** jednocześnie przez różne endpointy.
+Ten backend został rozszerzony o możliwość **konfiguracji i łatwego przełączania między różnymi modelami PyTorch (.pth)**.
+
+## Nowe podejście - Konfigurowalny model
+
+Zamiast uruchamiania wielu modeli jednocześnie, system pozwala na:
+- **Konfigurację wielu modeli** w pliku JSON
+- **Wybór aktywnego modelu** przez ustawienie `default_model`
+- **Łatwe przełączanie** między modelami przez edycję konfiguracji
+- **Oszczędność pamięci** - tylko jeden model w RAM na raz
 
 ## Struktura katalogów
 
 ```
 label-studio-ml-backend/
-├── _wsgi_multi.py          # Nowy WSGI z obsługą wielu modeli
+├── _wsgi_multi.py          # Nowy WSGI z obsługą konfiguracji
 ├── models_config.json      # Konfiguracja modeli
 ├── models/                 # Katalog z plikami .pth
 │   ├── best_attention_resunet_384.pth
-│   ├── best_resunet_512.pth
+│   ├── best_model.pth (attention_resunet)
 │   ├── best_unet_256.pth
 │   └── best_attention_resunet_640.pth
 └── docker-compose.yml      # Zaktualizowana konfiguracja Docker
@@ -20,9 +28,7 @@ label-studio-ml-backend/
 
 ## Konfiguracja modeli
 
-### Opcja 1: Plik JSON (zalecane)
-
-Stwórz plik `models_config.json`:
+### Plik models_config.json
 
 ```json
 {
@@ -33,16 +39,14 @@ Stwórz plik `models_config.json`:
       "resolution": 384,
       "threshold": 0.5,
       "min_component_size": 300,
-      "endpoint": "/",
-      "description": "Główny model"
+      "description": "Główny model 384px"
     },
     "model_512_resunet": {
-      "model_path": "/app/models/best_resunet_512.pth",
-      "model_type": "resunet",
+      "model_path": "/app/models/best_model.pth",
+      "model_type": "attention_resunet",
       "resolution": 512,
       "threshold": 0.45,
       "min_component_size": 250,
-      "endpoint": "/model_512",
       "description": "Model wysokiej rozdzielczości"
     }
   },
@@ -50,19 +54,19 @@ Stwórz plik `models_config.json`:
 }
 ```
 
-### Opcja 2: Zmienne środowiskowe
+### Przełączanie między modelami
 
-```bash
-export MODELS_CONFIG_JSON='{"models": {...}, "default_model": "..."}'
-```
+Aby zmienić aktywny model, wystarczy:
 
-### Opcja 3: Auto-discovery
+1. **Edytować `models_config.json`**:
+   ```json
+   "default_model": "model_512_resunet"
+   ```
 
-Umieść pliki `.pth` w katalogu `models/` - zostaną automatycznie wykryte:
-
-```bash
-export MODELS_DIR=/app/models
-```
+2. **Restart serwera**:
+   ```bash
+   docker-compose restart
+   ```
 
 ## Uruchomienie
 
@@ -94,17 +98,12 @@ python _wsgi_multi.py --port 9090 --models-config models_config.json
 
 ## Endpointy
 
-Po uruchomieniu dostępne będą następujące endpointy:
-
 ### Informacyjne
-- `GET /models` - Lista dostępnych modeli
+- `GET /models` - Lista skonfigurowanych modeli i aktywny model
 - `GET /health` - Status serwera
 
-### Predykcje
-- `POST /` - Predykcja głównym modelem (default)
-- `POST /model_512` - Predykcja modelem 512px
-- `POST /model_fast` - Predykcja szybkim modelem
-- `POST /model_precise` - Predykcja precyzyjnym modelem
+### Predykcje  
+- `POST /predict` - Predykcja aktywnym modelem
 
 ## Przykłady użycia
 
@@ -119,26 +118,24 @@ Odpowiedź:
 {
   "available_models": {
     "model_384_attention": {
-      "endpoint": "/",
       "model_type": "attention_resunet",
       "resolution": 384,
-      "description": "Główny model",
-      "status": "loaded"
+      "description": "Główny model 384px",
+      "is_active": true
     },
     "model_512_resunet": {
-      "endpoint": "/model_512",
-      "model_type": "resunet", 
+      "model_type": "attention_resunet", 
       "resolution": 512,
       "description": "Model wysokiej rozdzielczości",
-      "status": "loaded"
+      "is_active": false
     }
   },
-  "default_model": "model_384_attention",
-  "total_models": 2
+  "active_model": "model_384_attention",
+  "total_configured": 2
 }
 ```
 
-### Predykcja głównym modelem
+### Predykcja
 
 ```bash
 curl -X POST http://localhost:9090/predict \
@@ -146,37 +143,43 @@ curl -X POST http://localhost:9090/predict \
   -d '{"tasks": [{"data": {"image": "data:image/jpeg;base64,..."}}]}'
 ```
 
-### Predykcja konkretnym modelem
-
-```bash
-curl -X POST http://localhost:9090/model_512/predict \
-  -H "Content-Type: application/json" \
-  -d '{"tasks": [{"data": {"image": "data:image/jpeg;base64,..."}}]}'
-```
-
 ## Konfiguracja w Label Studio
 
-W Label Studio dodaj backend ML z odpowiednim URL:
-
-1. **Główny model**: `http://localhost:9090`
-2. **Model 512px**: `http://localhost:9090/model_512`
-3. **Szybki model**: `http://localhost:9090/model_fast`
+W Label Studio dodaj backend ML z URL: `http://localhost:9090`
 
 ## Zalety tego rozwiązania
 
-✅ **Prosta implementacja** - minimalne zmiany w istniejącym kodzie  
+✅ **Prostota** - jeden model aktywny na raz  
+✅ **Oszczędność pamięci** - tylko aktywny model w RAM  
+✅ **Łatwe przełączanie** - edycja JSON + restart  
 ✅ **Elastyczność** - łatwe dodawanie nowych modeli  
-✅ **Separacja** - każdy model ma własny endpoint  
 ✅ **Kompatybilność** - działa z istniejącą klasą `CoronarySegmentationModel`  
-✅ **Auto-discovery** - automatyczne wykrywanie modeli w katalogu  
-✅ **Konfigurowalność** - różne parametry dla każdego modelu  
+✅ **Przewidywalność** - zawsze wiadomo, który model jest aktywny  
 
-## Uwagi
+## Użycie z różnymi modelami
 
-- Każdy model jest ładowany do pamięci przy starcie
-- Więcej modeli = większe zużycie RAM
-- Pierwszy model jest domyślny (endpoint `/`)
-- Modele muszą być kompatybilne z funkcjami z `predictfn.py`
+### Model szybki (256px)
+```json
+"default_model": "model_256_fast"
+```
+- Szybka inferencja
+- Mniejsza dokładność
+- Idealne do wstępnych adnotacji
+
+### Model standardowy (384px)  
+```json
+"default_model": "model_384_attention"
+```
+- Kompromis szybkość/jakość
+- Zalecany do większości przypadków
+
+### Model precyzyjny (512px+)
+```json
+"default_model": "model_512_resunet"
+```
+- Wysoka dokładność
+- Wolniejsza inferencja
+- Idealne do finalnych adnotacji
 
 ## Debugowanie
 

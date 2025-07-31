@@ -151,14 +151,7 @@ def auto_discover_models(models_dir):
 
 
 def create_multi_model_app(models_config, **flask_kwargs):
-    """Stwórz aplikację Flask z wieloma modelami"""
-    
-    # Główna aplikacja Flask
-    main_app = Flask(__name__)
-    
-    # Słownik przechowujący aplikacje dla poszczególnych modeli
-    model_apps = {}
-    model_instances = {}
+    """Stwórz prostą aplikację z jednym domyślnym modelem"""
     
     models = models_config.get("models", {})
     default_model = models_config.get("default_model")
@@ -166,98 +159,65 @@ def create_multi_model_app(models_config, **flask_kwargs):
     if not models:
         raise ValueError("No models configured!")
     
-    # Twórz aplikacje dla każdego modelu
-    for model_name, model_config in models.items():
-        logger.info(f"Initializing model '{model_name}' for endpoint '{model_config.get('endpoint', '/')}'")
-        
-        try:
-            # Stwórz instancję modelu z odpowiednią konfiguracją
-            model_instance = CoronarySegmentationModel(**model_config)
-            model_instances[model_name] = model_instance
-            
-            # Stwórz aplikację Label Studio ML dla tego modelu
-            model_app = init_app(
-                model_class=lambda **kwargs: model_instance,  # Użyj gotowej instancji
-                **flask_kwargs
-            )
-            
-            model_apps[model_name] = model_app
-            
-            logger.info(f"✅ Model '{model_name}' initialized successfully")
-            
-        except Exception as e:
-            logger.error(f"❌ Failed to initialize model '{model_name}': {e}")
-            import traceback
-            traceback.print_exc()
+    # Wybierz domyślny model
+    if default_model and default_model in models:
+        selected_model_config = models[default_model]
+        selected_model_name = default_model
+    else:
+        # Użyj pierwszego dostępnego modelu
+        selected_model_name = list(models.keys())[0]
+        selected_model_config = models[selected_model_name]
     
-    # Dodaj routing do głównej aplikacji
-    @main_app.route('/models', methods=['GET'])
+    logger.info(f"Creating single-model app with: {selected_model_name}")
+    logger.info(f"Model config: {selected_model_config}")
+    
+    # Stwórz wrapper klasę dla wybranego modelu
+    class SelectedModelWrapper(CoronarySegmentationModel):
+        def __init__(self, **kwargs):
+            # Połącz kwargs z selected_model_config, gdzie kwargs mają priorytet
+            merged_config = {**selected_model_config, **kwargs}
+            super().__init__(**merged_config)
+    
+    # Dodaj unikalną nazwę do klasy
+    SelectedModelWrapper.__name__ = f"{selected_model_name}_Wrapper"
+    SelectedModelWrapper.__qualname__ = f"{selected_model_name}_Wrapper"
+    
+    # Stwórz standardową aplikację Label Studio ML
+    app = init_app(
+        model_class=SelectedModelWrapper,
+        **flask_kwargs
+    )
+    
+    # Dodaj dodatkowe endpointy informacyjne
+    @app.route('/models', methods=['GET'])
     def list_models():
-        """Endpoint zwracający listę dostępnych modeli"""
+        """Endpoint zwracający listę skonfigurowanych modeli"""
         result = {
             "available_models": {},
-            "default_model": default_model,
-            "total_models": len(model_instances)
+            "active_model": selected_model_name,
+            "total_configured": len(models)
         }
         
         for model_name, model_config in models.items():
-            if model_name in model_instances:
-                result["available_models"][model_name] = {
-                    "endpoint": model_config.get("endpoint", "/"),
-                    "model_type": model_config.get("model_type"),
-                    "resolution": model_config.get("resolution"),
-                    "description": model_config.get("description", ""),
-                    "status": "loaded"
-                }
+            result["available_models"][model_name] = {
+                "model_type": model_config.get("model_type"),
+                "resolution": model_config.get("resolution"),
+                "description": model_config.get("description", ""),
+                "is_active": model_name == selected_model_name
+            }
         
         return jsonify(result)
     
-    @main_app.route('/health', methods=['GET'])
+    @app.route('/health', methods=['GET'])
     def health_check():
         """Health check endpoint"""
         return jsonify({
             "status": "healthy",
-            "models_loaded": len(model_instances),
+            "active_model": selected_model_name,
             "timestamp": os.popen('date').read().strip()
         })
     
-    # Dynamiczne routowanie do aplikacji modeli
-    for model_name, model_config in models.items():
-        if model_name not in model_apps:
-            continue
-            
-        endpoint = model_config.get("endpoint", "/")
-        model_app = model_apps[model_name]
-        
-        # Funkcja tworząca handler dla danego modelu
-        def create_model_handler(app, name):
-            def handle_request(path=""):
-                # Przekieruj żądanie do odpowiedniej aplikacji modelu
-                with app.test_request_context():
-                    return app.full_dispatch_request()
-            return handle_request
-        
-        # Dodaj reguły routingu
-        if endpoint == "/":
-            # Główny endpoint
-            main_app.add_url_rule('/', f'model_{model_name}_root', 
-                                 create_model_handler(model_app, model_name), 
-                                 methods=['GET', 'POST'])
-            main_app.add_url_rule('/<path:path>', f'model_{model_name}_path', 
-                                 create_model_handler(model_app, model_name), 
-                                 methods=['GET', 'POST'])
-        else:
-            # Dodatkowe endpointy
-            main_app.add_url_rule(f'{endpoint}', f'model_{model_name}_root', 
-                                 create_model_handler(model_app, model_name), 
-                                 methods=['GET', 'POST'])
-            main_app.add_url_rule(f'{endpoint}/<path:path>', f'model_{model_name}_path', 
-                                 create_model_handler(model_app, model_name), 
-                                 methods=['GET', 'POST'])
-    
-    return main_app
-
-
+    return app
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Multi-Model Coronary Artery Segmentation ML Backend')
     parser.add_argument(
@@ -340,7 +300,7 @@ if __name__ == "__main__":
             print('✅ Check completed')
             exit(0)
 
-    # Utwórz aplikację z wieloma modelami
+    # Utwórz aplikację z jednym wybranym modelem
     try:
         app = create_multi_model_app(
             models_config,
@@ -348,26 +308,30 @@ if __name__ == "__main__":
             basic_auth_pass=args.basic_auth_pass
         )
         
-        print(f"🏥 Starting Multi-Model Coronary Segmentation ML Backend")
-        print(f"📋 Loaded Models:")
+        default_model = models_config.get("default_model")
+        active_model = default_model if default_model in models_config.get("models", {}) else list(models_config.get("models", {}).keys())[0]
+        active_config = models_config.get("models", {}).get(active_model, {})
         
-        for model_name, model_config in models_config.get("models", {}).items():
-            endpoint = model_config.get("endpoint", "/")
-            model_type = model_config.get("model_type", "unknown")
-            resolution = model_config.get("resolution", "unknown")
-            print(f"   • {model_name}: {endpoint} ({model_type}, {resolution}px)")
-        
+        print(f"🏥 Starting Coronary Segmentation ML Backend")
+        print(f"📋 Active Model: {active_model}")
+        print(f"   Type: {active_config.get('model_type', 'unknown')}")
+        print(f"   Resolution: {active_config.get('resolution', 'unknown')}px")
+        print(f"   Path: {active_config.get('model_path', 'unknown')}")
         print(f"🌐 Server: http://{args.host}:{args.port}")
         print(f"📡 Endpoints:")
-        print(f"   • GET  /models  - Lista dostępnych modeli")
+        print(f"   • GET  /models  - Lista skonfigurowanych modeli")
         print(f"   • GET  /health  - Health check")
-        print(f"   • POST /        - Predykcja (domyślny model)")
+        print(f"   • POST /predict - Predykcja")
         
-        # Wyświetl dodatkowe endpointy
-        for model_name, model_config in models_config.get("models", {}).items():
-            endpoint = model_config.get("endpoint", "/")
-            if endpoint != "/":
-                print(f"   • POST {endpoint}     - Predykcja ({model_name})")
+        print(f"\n💡 Uwaga: Aktualnie uruchomiony jest model '{active_model}'")
+        print(f"   Aby zmienić model, edytuj 'default_model' w models_config.json")
+        print(f"📡 Endpoints:")
+        print(f"   • GET  /models  - Lista skonfigurowanych modeli")
+        print(f"   • GET  /health  - Health check")
+        print(f"   • POST /predict - Predykcja")
+        
+        print(f"\n💡 Uwaga: Aktualnie uruchomiony jest model '{active_model}'")
+        print(f"   Aby zmienić model, edytuj 'default_model' w models_config.json")
         
         app.run(host=args.host, port=args.port, debug=args.debug)
         
