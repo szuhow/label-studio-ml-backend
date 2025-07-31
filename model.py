@@ -46,12 +46,23 @@ class CoronarySegmentationModel(LabelStudioMLBase):
     """
     
     def __init__(self, **kwargs):
-        super(CoronarySegmentationModel, self).__init__(**kwargs)
+        # Wydziel parametry specyficzne dla naszego modelu przed wywołaniem super().__init__()
+        model_specific_params = {
+            'model_path', 'model_type', 'resolution', 'threshold', 
+            'min_component_size', 'endpoint', 'description'
+        }
+        
+        # Podziel kwargs na te dla klasy bazowej i te dla naszego modelu
+        base_kwargs = {k: v for k, v in kwargs.items() if k not in model_specific_params}
+        model_kwargs = {k: v for k, v in kwargs.items() if k in model_specific_params}
+        
+        # Wywołaj konstruktor klasy bazowej tylko z odpowiednimi parametrami
+        super(CoronarySegmentationModel, self).__init__(**base_kwargs)
         
         # Konfiguracja modelu - pobieraj ze zmiennych środowiskowych lub kwargs
         # Inteligentne ustalanie ścieżki modelu - sprawdź która ścieżka rzeczywiście istnieje
         potential_model_paths = [
-            kwargs.get('model_path'),  # Priorytet 1: explicit kwargs
+            model_kwargs.get('model_path'),  # Priorytet 1: explicit kwargs
             os.getenv('MODEL_PATH')   # Priorytet 2: zmienna środowiskowa
         ]
         
@@ -70,10 +81,10 @@ class CoronarySegmentationModel(LabelStudioMLBase):
                     logger.warning(f"No model file found, using fallback path: {path}")
                     break
         
-        self.model_type = kwargs.get('model_type') or os.getenv('MODEL_TYPE', 'attention_resunet')
-        self.resolution = kwargs.get('resolution') or int(os.getenv('RESOLUTION', '320'))
-        self.threshold = kwargs.get('threshold') or float(os.getenv('THRESHOLD', '0.5'))
-        self.min_component_size = kwargs.get('min_component_size') or int(os.getenv('MIN_COMPONENT_SIZE', '300'))
+        self.model_type = model_kwargs.get('model_type') or os.getenv('MODEL_TYPE', 'attention_resunet')
+        self.resolution = model_kwargs.get('resolution') or int(os.getenv('RESOLUTION', '320'))
+        self.threshold = model_kwargs.get('threshold') or float(os.getenv('THRESHOLD', '0.5'))
+        self.min_component_size = model_kwargs.get('min_component_size') or int(os.getenv('MIN_COMPONENT_SIZE', '300'))
         
         # Debug info
         logger.info(f"Model configuration:")
@@ -82,7 +93,7 @@ class CoronarySegmentationModel(LabelStudioMLBase):
         logger.info(f"  resolution: {self.resolution}")
         logger.info(f"  threshold: {self.threshold}")
         logger.info(f"  Environment MODEL_PATH: {os.getenv('MODEL_PATH', 'Not set')}")
-        logger.info(f"  kwargs model_path: {kwargs.get('model_path', 'Not set')}")
+        logger.info(f"  kwargs model_path: {model_kwargs.get('model_path', 'Not set')}")
         
         # Inicjalizuj model
         self.model = None
