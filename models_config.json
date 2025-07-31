@@ -1,0 +1,41 @@
+{
+  "models": {
+    "model_384_attention": {
+      "model_path": "/app/models/best_attention_resunet_384.pth",
+      "model_type": "attention_resunet",
+      "resolution": 384,
+      "threshold": 0.5,
+      "min_component_size": 300,
+      "endpoint": "/",
+      "description": "Attention ResUNet model trained at 384px resolution - main model"
+    },
+    "model_512_resunet": {
+      "model_path": "/app/models/best_resunet_512.pth",
+      "model_type": "resunet",
+      "resolution": 512,
+      "threshold": 0.45,
+      "min_component_size": 250,
+      "endpoint": "/model_512",
+      "description": "ResUNet model trained at 512px resolution - high detail"
+    },
+    "model_256_fast": {
+      "model_path": "/app/models/best_unet_256.pth",
+      "model_type": "unet",
+      "resolution": 256,
+      "threshold": 0.6,
+      "min_component_size": 400,
+      "endpoint": "/model_fast",
+      "description": "UNet model trained at 256px resolution - fast inference"
+    },
+    "model_640_precise": {
+      "model_path": "/app/models/best_attention_resunet_640.pth",
+      "model_type": "attention_resunet",
+      "resolution": 640,
+      "threshold": 0.4,
+      "min_component_size": 200,
+      "endpoint": "/model_precise",
+      "description": "High-resolution model for precise segmentation"
+    }
+  },
+  "default_model": "model_384_attention"
+}

@@ -22,6 +22,10 @@ services:
       # specify the model directory (likely you don't need to change this)
       - MODEL_DIR=/data/models
 
+      # Multi-model configuration
+      - MODELS_DIR=/app/models
+      - MODELS_CONFIG_PATH=/app/models_config.json
+
       # Specify the Label Studio URL and API key to access
       # uploaded, local storage and cloud storage files.
       # Do not use 'localhost' as it does not work within Docker containers.
@@ -33,3 +37,5 @@ services:
       - "9090:9090"
     volumes:
       - "./data/server:/data"
+      - "./models:/app/models"  # Katalog z modelami .pth
+      - "./models_config.json:/app/models_config.json"  # Konfiguracja modeli
