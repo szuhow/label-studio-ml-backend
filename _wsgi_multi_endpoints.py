@@ -253,11 +253,17 @@ def create_multi_endpoint_app(models_config, **flask_kwargs):
                 # Import dla każdego żądania
                 from flask import request as flask_request
                 
+                # Przygotuj ścieżkę dla przekierowania
+                new_path = flask_request.path.replace(ep.rstrip('/'), '') or '/'
+                
+                # Skopiuj nagłówki do zwykłego dict aby uniknąć problemu z EnvironHeaders
+                headers_dict = dict(flask_request.headers)
+                
                 # Przekieruj całe żądanie do odpowiedniej aplikacji modelu
                 with app.test_request_context(
-                    path=flask_request.path.replace(ep.rstrip('/'), '') or '/',
+                    path=new_path,
                     method=flask_request.method,
-                    headers=flask_request.headers,
+                    headers=headers_dict,
                     data=flask_request.get_data(),
                     query_string=flask_request.query_string
                 ):
@@ -265,6 +271,7 @@ def create_multi_endpoint_app(models_config, **flask_kwargs):
                         response = app.full_dispatch_request()
                         return response
                     except Exception as e:
+                        logger.error(f"Error in model {name} at endpoint {ep}: {e}")
                         return jsonify({"error": str(e)}), 500
             
             model_view.__name__ = f'{name}_view'
