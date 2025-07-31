@@ -1,0 +1,6 @@
+torch
+opencv-python
+pillow
+albumentations
+requests
+label-studio-ml

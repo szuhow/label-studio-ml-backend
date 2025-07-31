@@ -1,0 +1,11 @@
+gunicorn==22.0.0
+label-studio-ml @ git+https://github.com/HumanSignal/label-studio-ml-backend.git
+torch
+opencv-python-headless>=4.5.0
+pillow
+albumentations
+requests
+label-studio-ml
+matplotlib
+torchvision
+tensorboard
