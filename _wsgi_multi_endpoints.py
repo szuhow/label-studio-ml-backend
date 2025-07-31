@@ -157,8 +157,15 @@ def create_model_wrapper_class(model_name, model_config):
     
     class ModelWrapper(CoronarySegmentationModel):
         def __init__(self, **kwargs):
+            # Debug: sprawdź co jest przekazywane
+            logger.info(f"🔍 ModelWrapper.__init__ for {model_name}:")
+            logger.info(f"   kwargs: {kwargs}")
+            logger.info(f"   model_config: {model_config}")
+            
             # Połącz model_config z kwargs, gdzie model_config ma priorytet
             merged_config = {**kwargs, **model_config}
+            logger.info(f"   merged_config: {merged_config}")
+            
             super().__init__(**merged_config)
     
     # Dodaj unikalną nazwę do klasy
