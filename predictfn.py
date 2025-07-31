@@ -972,7 +972,60 @@ def create_dataloaders(data_path=path,
 
 
 
-def preprocess_single_image(image_path, resolution=512, apply_preprocessing=True):
+def remove_double_frames(image):
+    """
+    Usuwa podwójne ramki z obrazu medycznego
+    
+    Args:
+        image: PIL Image lub numpy array
+    
+    Returns:
+        image: Obraz z usuniętymi ramkami
+    """
+    import cv2
+    import numpy as np
+    
+    if isinstance(image, np.ndarray):
+        img_array = image
+    else:
+        img_array = np.array(image)
+    
+    # Konwertuj do grayscale jeśli potrzebne
+    if len(img_array.shape) == 3:
+        gray = cv2.cvtColor(img_array, cv2.COLOR_RGB2GRAY)
+    else:
+        gray = img_array
+    
+    # Wykryj krawędzie
+    edges = cv2.Canny(gray, 50, 150)
+    
+    # Znajdź kontury
+    contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    
+    # Filtruj kontury - usuń te które wyglądają jak ramki
+    filtered_contours = []
+    for contour in contours:
+        area = cv2.contourArea(contour)
+        if area > 1000:  # Minimalny rozmiar
+            # Sprawdź czy to prostokąt (ramka)
+            x, y, w, h = cv2.boundingRect(contour)
+            aspect_ratio = w / h if h > 0 else 0
+            
+            # Jeśli to prostokąt o rozsądnych proporcjach, prawdopodobnie to ramka
+            if 0.5 < aspect_ratio < 2.0 and area > 5000:
+                continue  # Pomiń ramki
+            filtered_contours.append(contour)
+    
+    # Stwórz maskę bez ramek
+    mask = np.ones_like(gray) * 255
+    cv2.fillPoly(mask, filtered_contours, 0)
+    
+    # Zastosuj maskę
+    result = cv2.bitwise_and(img_array, img_array, mask=mask)
+    
+    return result
+
+def preprocess_single_image(image_path, resolution=512, apply_preprocessing=True, remove_frames=False):
     """
     Preprocessing pojedynczego obrazu identyczny jak w treningu
 
@@ -980,6 +1033,7 @@ def preprocess_single_image(image_path, resolution=512, apply_preprocessing=True
         image_path: Ścieżka do obrazu
         resolution: Rozdzielczość modelu (256, 384, 512, etc.)
         apply_preprocessing: Czy zastosować CLAHE i denoising
+        remove_frames: Czy usunąć podwójne ramki
 
     Returns:
         tensor: Przetworzony tensor gotowy do inferencji
@@ -990,6 +1044,13 @@ def preprocess_single_image(image_path, resolution=512, apply_preprocessing=True
         image = Image.open(image_path)
     else:
         image = image_path  # Już załadowany PIL Image
+
+    # Usuń podwójne ramki jeśli wymagane
+    if remove_frames:
+        print("🔧 Removing double frames from image...")
+        image = remove_double_frames(image)
+        if isinstance(image, np.ndarray):
+            image = Image.fromarray(image)
 
     # Konwertuj na grayscale
     if image.mode != 'L':

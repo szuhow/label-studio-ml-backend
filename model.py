@@ -50,7 +50,8 @@ class CoronarySegmentationModel(LabelStudioMLBase):
         model_specific_params = {
             'model_path', 'model_type', 'resolution', 'threshold', 
             'min_component_size', 'endpoint', 'description',
-            'smooth_mask_method', 'smooth_contour_method', 'polygon_detail_level'
+            'smooth_mask_method', 'smooth_contour_method', 'polygon_detail_level',
+            'remove_frames'
         }
         
         # Podziel kwargs na te dla klasy bazowej i te dla naszego modelu
@@ -91,6 +92,7 @@ class CoronarySegmentationModel(LabelStudioMLBase):
         self.smooth_mask_method = model_kwargs.get('smooth_mask_method') or os.getenv('SMOOTH_MASK_METHOD', 'morphology')
         self.smooth_contour_method = model_kwargs.get('smooth_contour_method') or os.getenv('SMOOTH_CONTOUR_METHOD', 'approx')
         self.polygon_detail_level = model_kwargs.get('polygon_detail_level') or os.getenv('POLYGON_DETAIL_LEVEL', 'high')  # 'low', 'medium', 'high', 'ultra'
+        self.remove_frames = model_kwargs.get('remove_frames', False)  # Czy usuwać podwójne ramki
         
         # Debug info
         logger.info(f"Model configuration:")
@@ -101,6 +103,7 @@ class CoronarySegmentationModel(LabelStudioMLBase):
         logger.info(f"  smooth_mask_method: {self.smooth_mask_method}")
         logger.info(f"  smooth_contour_method: {self.smooth_contour_method}")
         logger.info(f"  polygon_detail_level: {self.polygon_detail_level}")
+        logger.info(f"  remove_frames: {self.remove_frames}")
         logger.info(f"  Environment MODEL_PATH: {os.getenv('MODEL_PATH', 'Not set')}")
         logger.info(f"  kwargs model_path: {model_kwargs.get('model_path', 'Not set')}")
         
@@ -706,7 +709,8 @@ class CoronarySegmentationModel(LabelStudioMLBase):
                 image_tensor, original_image = preprocess_single_image(
                     image, 
                     resolution=self.resolution,
-                    apply_preprocessing=True
+                    apply_preprocessing=True,
+                    remove_frames=self.remove_frames
                 )
                 
                 # Inferencja

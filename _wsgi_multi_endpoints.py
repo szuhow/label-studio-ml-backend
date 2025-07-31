@@ -205,6 +205,10 @@ def create_multi_endpoint_app(models_config, **flask_kwargs):
                 **flask_kwargs
             )
             
+            logger.info(f"🔍 Created Flask app for {model_name}: {model_app}")
+            logger.info(f"🔍 Flask app ID: {id(model_app)}")
+            logger.info(f"🔍 Flask app name: {model_app.name if hasattr(model_app, 'name') else 'No name'}")
+            
             model_apps[model_name] = {
                 'app': model_app,
                 'endpoint': endpoint,
@@ -274,9 +278,14 @@ def create_multi_endpoint_app(models_config, **flask_kwargs):
             from flask import request as flask_request
             
             logger.info(f"🔄 Routing request to model: {current_model_name}, endpoint: {current_endpoint}, path: {flask_request.path}")
+            logger.info(f"🔍 Current model app ID: {id(current_model_app)}")
+            logger.info(f"🔍 Current model app name: {current_model_app.name if hasattr(current_model_app, 'name') else 'No name'}")
             
             new_path = flask_request.path.replace(current_endpoint.rstrip('/'), '') or '/'
             headers_dict = dict(flask_request.headers)
+            
+            logger.info(f"🔍 Using Flask app instance: {current_model_app}")
+            logger.info(f"🔍 Request path: {flask_request.path} -> {new_path}")
             
             with current_model_app.test_request_context(
                 path=new_path,
@@ -286,6 +295,7 @@ def create_multi_endpoint_app(models_config, **flask_kwargs):
                 query_string=flask_request.query_string
             ):
                 try:
+                    logger.info(f"🔍 Dispatching request to app: {current_model_app}")
                     response = current_model_app.full_dispatch_request()
                     return response
                 except Exception as e:
