@@ -8,6 +8,8 @@ services:
       context: .
       args:
         TEST_ENV: ${TEST_ENV}
+    networks:
+      - ml-network
     # GPU configuration - use --gpus all instead of runtime: nvidia
     environment:
       # NVIDIA GPU configuration
@@ -30,6 +32,7 @@ services:
       # Multi-model configuration
       - MODELS_DIR=/app/models
       - MODELS_CONFIG_PATH=/app/models_config.json
+      - TEST_ENV=true
 
       # Specify the Label Studio URL and API key to access
       # uploaded, local storage and cloud storage files.
@@ -51,3 +54,9 @@ services:
       - "./data/server:/data"
       - "./models:/app/models"  # Katalog z modelami .pth
       - "./models_config.json:/app/models_config.json"  # Konfiguracja modeli
+      - "./image:/app/image"  # Katalog z obrazami testowymi do debugowania
+
+networks:
+  ml-network:
+    name: ml-network
+    driver: bridge

@@ -4,3 +4,12 @@ pillow
 albumentations
 requests
 label-studio-ml
+label-studio-converter
+transformers
+gunicorn
+rq
+matplotlib
+torch
+opencv-python-headless>=4.5.0
+torchvision
+tensorboard

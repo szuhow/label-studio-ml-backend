@@ -38,6 +38,27 @@
       "remove_frames": false,
       "endpoint": "/model-3",
       "description": "Enhanced UNet model - high detail polygons with minimal smoothing"
+    },
+    "model_4_segformer": {
+      "model_path": "/app/models/model.pth",
+      "model_type": "segformer",
+      "model_size": "b4",
+      "resolution": 512,
+      "num_classes": 26,
+      "threshold": 0.5,
+      "min_component_size": 300,
+      "smooth_mask_method": "morphology",
+      "smooth_contour_method": "approx",
+      "polygon_detail_level": "high",
+      "use_clahe": true,
+      "clahe_space": "lab",
+      "clahe_clip": 2.0,
+      "clahe_grid": "8,8",
+      "use_denoise": true,
+      "denoise_method": "nlmeans",
+      "remove_frames": false,
+      "endpoint": "/model-4",
+      "description": "Segformer model - basic smoothing, high detail polygons"
     }
   },
   "default_model": "model_1_attention"

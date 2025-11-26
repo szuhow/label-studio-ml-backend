@@ -2,6 +2,7 @@ import os
 import logging
 import numpy as np
 import torch
+import uuid
 
 # Bezpieczny import OpenCV
 try:
@@ -21,9 +22,11 @@ from pathlib import Path
 from label_studio_ml.model import LabelStudioMLBase
 from label_studio_ml.utils import get_image_size, get_single_tag_keys
 
+logger = logging.getLogger(__name__)
+
 # Import funkcji z predict.py
 import sys
-from predictfn import (
+from utils_unet import (
     create_model, 
     preprocess_single_image, 
     load_trained_model_for_inference,
@@ -31,7 +34,19 @@ from predictfn import (
     remove_small_components_from_mask
 )
 
-logger = logging.getLogger(__name__)
+# Import funkcji dla Segformer
+try:
+    from utils_segformer import (
+        load_model_for_inference_from_checkpoint,
+        predict_pil_image_with_thresholding,
+        predict_pil_image,
+        apply_clahe_pil,
+        apply_denoise_pil
+    )
+    SEGFORMER_AVAILABLE = True
+except ImportError as e:
+    logger.warning(f"Segformer utils not available: {e}")
+    SEGFORMER_AVAILABLE = False
 
 
 class CoronarySegmentationModel(LabelStudioMLBase):
@@ -59,12 +74,12 @@ class CoronarySegmentationModel(LabelStudioMLBase):
         model_kwargs = {k: v for k, v in kwargs.items() if k in model_specific_params}
         
         # Debug: sprawdź co jest w kwargs
-        logger.info(f"🔍 All kwargs keys: {list(kwargs.keys())}")
-        logger.info(f"🔍 Model specific params: {model_specific_params}")
-        logger.info(f"🔍 Base kwargs keys: {list(base_kwargs.keys())}")
-        logger.info(f"🔍 Model kwargs keys: {list(model_kwargs.keys())}")
+        logger.info(f" All kwargs keys: {list(kwargs.keys())}")
+        logger.info(f" Model specific params: {model_specific_params}")
+        logger.info(f" Base kwargs keys: {list(base_kwargs.keys())}")
+        logger.info(f" Model kwargs keys: {list(model_kwargs.keys())}")
         if 'remove_frames' in kwargs:
-            logger.info(f"🔍 remove_frames value: {kwargs['remove_frames']} (type: {type(kwargs['remove_frames'])})")
+            logger.info(f" remove_frames value: {kwargs['remove_frames']} (type: {type(kwargs['remove_frames'])})")
         
         # Wywołaj konstruktor klasy bazowej tylko z odpowiednimi parametrami
         super(CoronarySegmentationModel, self).__init__(**base_kwargs)
@@ -254,6 +269,8 @@ class CoronarySegmentationModel(LabelStudioMLBase):
     
     def _load_model(self):
         """Załaduj model do pamięci"""
+        import torch  # Import na początku metody, żeby był dostępny w całej metodzie
+        
         try:
             logger.info(f"Attempting to load model from: {self.model_path}")
             logger.info(f"File exists check: {os.path.exists(self.model_path)}")
@@ -264,7 +281,6 @@ class CoronarySegmentationModel(LabelStudioMLBase):
                 logger.info(f"Model file found, loading...")
                 
                 # Sprawdź dostępność GPU przed ładowaniem modelu
-                import torch
                 logger.info(f"CUDA available: {torch.cuda.is_available()}")
                 if torch.cuda.is_available():
                     logger.info(f"CUDA device count: {torch.cuda.device_count()}")
@@ -879,6 +895,791 @@ class CoronarySegmentationModel(LabelStudioMLBase):
             'device': str(self.device),
             'model_loaded': self.model is not None,
             'classes': ['coronary_artery']
+        }
+
+
+class SegFormerSegmentationModel(LabelStudioMLBase):
+    """
+    ML Backend dla segmentacji naczyń wieńcowych w Label Studio używający Segformer
+    
+    Wspiera:
+    - Predykcje segmentacji jako RLE (Run Length Encoding)
+    - Polygony i maski dla Label Studio
+    - Preprocessing: CLAHE, denoising
+    - Thresholding po pewności predykcji
+    """
+    
+    def __init__(self, **kwargs):
+        # Wydziel parametry specyficzne dla Segformer
+        model_specific_params = {
+            'model_path', 'model_type', 'model_size', 'resolution', 'num_classes',
+            'threshold', 'background_threshold', 'vessel_threshold',
+            'min_component_size', 'endpoint', 'description',
+            'smooth_mask_method', 'smooth_contour_method', 'polygon_detail_level',
+            'use_clahe', 'clahe_space', 'clahe_clip', 'clahe_grid',
+            'use_denoise', 'denoise_method', 'remove_frames'
+        }
+        
+        base_kwargs = {k: v for k, v in kwargs.items() if k not in model_specific_params}
+        model_kwargs = {k: v for k, v in kwargs.items() if k in model_specific_params}
+        
+        super(SegFormerSegmentationModel, self).__init__(**base_kwargs)
+        
+        # Konfiguracja modelu
+        potential_model_paths = [
+            model_kwargs.get('model_path'),
+            os.getenv('MODEL_PATH')
+        ]
+        
+        self.model_path = None
+        for path in potential_model_paths:
+            if path and os.path.exists(path):
+                self.model_path = path
+                logger.info(f"Found existing model at: {path}")
+                break
+        
+        if not self.model_path:
+            for path in potential_model_paths:
+                if path:
+                    self.model_path = path
+                    logger.warning(f"No model file found, using fallback path: {path}")
+                    break
+        
+        self.model_type = model_kwargs.get('model_type') or os.getenv('MODEL_TYPE', 'segformer')
+        self.model_size = model_kwargs.get('model_size') or os.getenv('MODEL_SIZE', 'b4')
+        self.resolution = model_kwargs.get('resolution') or int(os.getenv('RESOLUTION', '512'))
+        self.num_classes = model_kwargs.get('num_classes') or int(os.getenv('NUM_CLASSES', '2'))
+        self.threshold = model_kwargs.get('threshold') or float(os.getenv('THRESHOLD', '0.5'))
+        self.background_threshold = model_kwargs.get('background_threshold') or float(os.getenv('BACKGROUND_THRESHOLD', '0.70'))
+        self.vessel_threshold = model_kwargs.get('vessel_threshold') or float(os.getenv('VESSEL_THRESHOLD', '0.2'))
+        self.min_component_size = model_kwargs.get('min_component_size') or int(os.getenv('MIN_COMPONENT_SIZE', '300'))
+        
+        # Preprocessing
+        self.use_clahe = model_kwargs.get('use_clahe', False) or (os.getenv('USE_CLAHE', 'false').lower() == 'true')
+        self.clahe_space = model_kwargs.get('clahe_space') or os.getenv('CLAHE_SPACE', 'lab')
+        self.clahe_clip = model_kwargs.get('clahe_clip') or float(os.getenv('CLAHE_CLIP', '2.0'))
+        clahe_grid_raw = model_kwargs.get('clahe_grid') or os.getenv('CLAHE_GRID', '8,8')
+        # Upewnij się, że clahe_grid jest tuple z dokładnie 2 elementami
+        if isinstance(clahe_grid_raw, str):
+            parts = clahe_grid_raw.split(',')
+            self.clahe_grid = tuple(map(int, parts[:2]))  # Weź tylko pierwsze 2 elementy
+        elif isinstance(clahe_grid_raw, (list, tuple)):
+            self.clahe_grid = tuple(map(int, clahe_grid_raw[:2]))  # Weź tylko pierwsze 2 elementy
+        else:
+            self.clahe_grid = (8, 8)  # Domyślna wartość
+        
+        self.use_denoise = model_kwargs.get('use_denoise', False) or (os.getenv('USE_DENOISE', 'false').lower() == 'true')
+        self.denoise_method = model_kwargs.get('denoise_method') or os.getenv('DENOISE_METHOD', 'nlmeans')
+        
+        # Postprocessing
+        self.smooth_mask_method = model_kwargs.get('smooth_mask_method') or os.getenv('SMOOTH_MASK_METHOD', 'morphology')
+        self.smooth_contour_method = model_kwargs.get('smooth_contour_method') or os.getenv('SMOOTH_CONTOUR_METHOD', 'approx')
+        self.polygon_detail_level = model_kwargs.get('polygon_detail_level') or os.getenv('POLYGON_DETAIL_LEVEL', 'high')
+        self.remove_frames = model_kwargs.get('remove_frames', False)
+        
+        logger.info(f"SegFormer Model configuration:")
+        logger.info(f"  model_path: {self.model_path}")
+        logger.info(f"  model_size: {self.model_size}")
+        logger.info(f"  resolution: {self.resolution}")
+        logger.info(f"  num_classes: {self.num_classes}")
+        logger.info(f"  background_threshold: {self.background_threshold}")
+        logger.info(f"  vessel_threshold: {self.vessel_threshold}")
+        logger.info(f"  use_clahe: {self.use_clahe}")
+        logger.info(f"  use_denoise: {self.use_denoise}")
+        
+        # Inicjalizuj model
+        self.model = None
+        self.processor = None
+        self.device = None
+        self._load_model()
+        
+        # Label Studio configuration
+        self.from_name = None
+        self.to_name = None
+        self.value = None
+        self.classes = ['coronary_artery']
+        self.label_schema_classes = []
+        
+        try:
+            if hasattr(self, 'parsed_label_config') and self.parsed_label_config:
+                config = self.parsed_label_config
+                # Dla Segformer preferuj BrushLabels (używamy RLE)
+                preferred_order = ['BrushLabels', 'PolygonLabels', 'RectangleLabels']
+                best_match = None
+                best_priority = 999
+                
+                for name, tag_info in config.items():
+                    if hasattr(tag_info, 'type'):
+                        try:
+                            priority = preferred_order.index(tag_info.type)
+                            if priority < best_priority:
+                                best_match = (name, tag_info, tag_info.type)
+                                best_priority = priority
+                        except ValueError:
+                            pass
+                
+                if best_match:
+                    name, tag_info, tag_type = best_match
+                    self.from_name = name
+                    self.to_name = tag_info.to_name[0] if hasattr(tag_info, 'to_name') and tag_info.to_name else 'image'
+                    
+                    # Spróbuj różne sposoby pobrania klas
+                    if hasattr(tag_info, 'labels') and tag_info.labels:
+                        self.label_schema_classes = tag_info.labels
+                    elif hasattr(tag_info, 'label') and tag_info.label:
+                        # Może być pojedyncza klasa
+                        self.label_schema_classes = [tag_info.label] if isinstance(tag_info.label, str) else tag_info.label
+                    elif hasattr(tag_info, 'children') and tag_info.children:
+                        # Spróbuj wyciągnąć z children (Label elements)
+                        labels = []
+                        for child in tag_info.children:
+                            if hasattr(child, 'value'):
+                                labels.append(child.value)
+                        if labels:
+                            self.label_schema_classes = labels
+                    
+                    logger.info(f"Segformer: Found {len(self.label_schema_classes)} labels: {self.label_schema_classes}")
+                    if not self.label_schema_classes:
+                        logger.warning(f"Segformer: No labels found in tag_info. Available attributes: {dir(tag_info)}")
+                        if hasattr(tag_info, 'children'):
+                            logger.warning(f"Segformer: tag_info.children: {tag_info.children}")
+                    logger.info(f"Segformer: Selected {tag_type} with from_name='{self.from_name}', to_name='{self.to_name}'")
+        except Exception as e:
+            logger.warning(f"Error parsing label interface: {e}")
+        
+        if not self.from_name:
+            # Fallback dla BrushLabels (używamy RLE)
+            self.from_name = 'brush_labels'
+            self.to_name = 'image'
+            logger.warning(f"Segformer: Using fallback from_name='{self.from_name}'")
+            self.value = 'image'
+        
+        if not self.label_schema_classes:
+            self.label_schema_classes = ['coronary_artery']
+    
+    def get_model_version_str(self):
+        try:
+            if hasattr(self, '_model_version'):
+                return str(self._model_version)
+            return "1.0"
+        except:
+            return "1.0"
+    
+    def _load_model(self):
+        """Załaduj model Segformer"""
+        if not SEGFORMER_AVAILABLE:
+            logger.error("Segformer utils not available")
+            return
+        
+        try:
+            logger.info(f"Loading Segformer model from: {self.model_path}")
+            
+            if not self.model_path or not os.path.exists(self.model_path):
+                logger.warning(f"Model file not found: {self.model_path}")
+                return
+            
+            import torch
+            self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+            logger.info(f"Using device: {self.device}")
+            
+            self.model, self.processor = load_model_for_inference_from_checkpoint(
+                checkpoint_path=self.model_path,
+                model_size=self.model_size,
+                image_size=self.resolution,
+                num_classes=self.num_classes,
+                device=self.device
+            )
+            
+            logger.info(f"Segformer model loaded successfully")
+            
+        except Exception as e:
+            logger.error(f"Error loading Segformer model: {e}")
+            import traceback
+            traceback.print_exc()
+            self.model = None
+            self.processor = None
+    
+    def _download_image(self, url: str) -> Image.Image:
+        """Pobierz obraz z URL (obsługuje lokalne pliki Label Studio i CloudFront URLs)"""
+        try:
+            if url.startswith('data:'):
+                header, data = url.split(',', 1)
+                image_data = base64.b64decode(data)
+                return Image.open(io.BytesIO(image_data))
+            else:
+                # CloudFront i inne CDN mogą wymagać dodatkowych nagłówków
+                headers = {
+                    'User-Agent': 'Mozilla/5.0 (compatible; LabelStudioML/1.0)',
+                    'Accept': 'image/*,*/*'
+                }
+                
+                # Dla CloudFront może być potrzebny redirect handling
+                response = requests.get(url, timeout=30, stream=True, headers=headers, allow_redirects=True)
+                response.raise_for_status()
+                
+                # Sprawdź czy content nie jest pusty
+                if len(response.content) == 0:
+                    raise ValueError(f"Empty response from {url}")
+                
+                # Sprawdź magic bytes obrazu (bardziej niezawodne niż content-type)
+                image_data = response.content
+                is_image = False
+                
+                # Sprawdź magic bytes dla popularnych formatów
+                if len(image_data) >= 4:
+                    magic_bytes = image_data[:4]
+                    # PNG: 89 50 4E 47
+                    # JPEG: FF D8 FF E0/FF D8 FF E1/FF D8 FF DB
+                    # GIF: 47 49 46 38
+                    # BMP: 42 4D
+                    if (magic_bytes[:3] == b'\x89PN' or  # PNG
+                        magic_bytes[:2] == b'\xFF\xD8' or  # JPEG
+                        magic_bytes[:4] == b'GIF8' or  # GIF
+                        magic_bytes[:2] == b'BM'):  # BMP
+                        is_image = True
+                
+                # Sprawdź content-type jako fallback
+                content_type = response.headers.get('content-type', '').lower()
+                if not is_image and ('image/' in content_type):
+                    is_image = True
+                
+                # Jeśli nie wygląda na obraz, sprawdź czy to HTML/tekst
+                if not is_image:
+                    # Sprawdź czy to HTML (często CloudFront zwraca HTML przy błędach)
+                    if (b'<html' in image_data[:200].lower() or 
+                        b'<!doctype' in image_data[:200].lower() or
+                        'text/html' in content_type or 
+                        'text/plain' in content_type):
+                        content_preview = image_data[:500].decode('utf-8', errors='ignore')
+                        logger.error(f"Received HTML/text instead of image from {url[:150]}...")
+                        logger.error(f"Content-Type: {content_type}, Content preview: {content_preview[:200]}")
+                        raise ValueError(f"Server returned HTML/text instead of image. URL: {url[:150]}")
+                
+                # Spróbuj otworzyć obraz
+                try:
+                    image = Image.open(io.BytesIO(image_data))
+                    image.load()  # Wymusza załadowanie danych
+                    return image
+                except Exception as img_error:
+                    logger.error(f"Failed to parse image from {url[:150]}... Error: {img_error}")
+                    logger.error(f"Content-Type: {content_type}, Content length: {len(image_data)}")
+                    # Pokaż magic bytes
+                    if len(image_data) >= 16:
+                        magic_hex = image_data[:16].hex()
+                        logger.error(f"Magic bytes (hex): {magic_hex}")
+                    raise
+        except requests.exceptions.RequestException as e:
+            logger.error(f"HTTP error downloading image from {url[:150]}...: {e}")
+            raise
+        except Exception as e:
+            logger.error(f"Error downloading image from {url[:150]}...: {e}")
+            raise
+    
+    def _get_image_from_task(self, task: Dict) -> Image.Image:
+        """Pobierz obraz z zadania Label Studio (obsługuje lokalne pliki i CloudFront URLs)"""
+        # DEBUG: Zahardkodowany obraz testowy
+        # Sprawdź najpierw w kontenerze Docker, potem na hoście
+        debug_image_paths = [
+            '/app/image/1.png',  # W kontenerze Docker
+            '/home/rafal/Dokumenty/ivessystem/coronary/label-studio-ml-backend/image/1.png'  # Na hoście
+        ]
+        for debug_image_path in debug_image_paths:
+            if os.path.exists(debug_image_path):
+                logger.warning(f"DEBUG MODE: Using hardcoded test image: {debug_image_path}")
+                img = Image.open(debug_image_path)
+                logger.info(f"DEBUG IMAGE LOADED: path={debug_image_path}, size={img.size}, mode={img.mode}")
+                # Loguj statystyki obrazu
+                import numpy as np
+                img_array = np.array(img)
+                logger.info(f"DEBUG IMAGE STATS: shape={img_array.shape}, dtype={img_array.dtype}, "
+                           f"min={img_array.min()}, max={img_array.max()}, mean={img_array.mean():.2f}")
+                return img
+        
+        image_key = self.value if self.value else 'image'
+        possible_keys = [image_key, 'image', 'data', 'url']
+        image_url = None
+        
+        for key in possible_keys:
+            if key in task.get('data', {}):
+                image_url = task['data'][key]
+                break
+        
+        if not image_url:
+            data_keys = list(task.get('data', {}).keys())
+            if data_keys:
+                image_url = task['data'][data_keys[0]]
+                logger.info(f"Using fallback image key: {data_keys[0]}")
+        
+        if not image_url:
+            raise ValueError("No image URL found in task data")
+        
+        logger.debug(f"Image URL from task: {image_url[:200]}")
+        
+        # Sprawdź czy to URL HTTP/HTTPS (w tym CloudFront) lub base64
+        if image_url.startswith('http://') or image_url.startswith('https://') or image_url.startswith('data:'):
+            # Pełny URL (CloudFront, S3, itp.) lub base64
+            return self._download_image(image_url)
+        else:
+            # Lokalna ścieżka - może być w Label Studio lub na dysku
+            # Najpierw sprawdź czy plik istnieje lokalnie
+            if os.path.exists(image_url):
+                logger.debug(f"Found local file: {image_url}")
+                return Image.open(image_url)
+            
+            # Jeśli nie istnieje lokalnie, spróbuj pobrać przez Label Studio API
+            label_studio_url = None
+            
+            # Sprawdź czy mamy label_studio_url z setup request
+            if hasattr(self, 'label_studio_url') and self.label_studio_url:
+                label_studio_url = self.label_studio_url
+            else:
+                # Fallback do zmiennej środowiskowej
+                label_studio_url = os.getenv('LABEL_STUDIO_URL', 'http://localhost:8080')
+            
+            if label_studio_url:
+                # Label Studio często używa /data/upload/... jako ścieżki
+                # Usuń duplikaty slashes i zbuduj pełny URL
+                base_url = label_studio_url.rstrip('/')
+                path = image_url.lstrip('/')
+                full_url = f"{base_url}/{path}"
+                
+                logger.info(f"Local file not found, trying Label Studio URL: {full_url}")
+                try:
+                    return self._download_image(full_url)
+                except Exception as e:
+                    logger.warning(f"Failed to download from Label Studio URL {full_url}: {e}")
+                    # Jeśli to nie zadziałało, spróbuj jeszcze raz z /data/upload jeśli ścieżka nie zaczyna się od tego
+                    if not path.startswith('data/upload') and not path.startswith('/data/upload'):
+                        alt_url = f"{base_url}/data/upload/{path}"
+                        logger.info(f"Trying alternative Label Studio URL: {alt_url}")
+                        try:
+                            return self._download_image(alt_url)
+                        except Exception as alt_e:
+                            logger.error(f"Failed to download from alternative URL {alt_url}: {alt_e}")
+                            raise FileNotFoundError(f"Image not found locally and could not be downloaded from Label Studio: {image_url}")
+                    else:
+                        raise FileNotFoundError(f"Image not found locally and could not be downloaded from Label Studio: {image_url}")
+            else:
+                raise FileNotFoundError(f"Image file not found: {image_url} and LABEL_STUDIO_URL not set")
+    
+    def _remove_small_components(self, mask: np.ndarray, min_size: int = 300) -> np.ndarray:
+        """Usuwa małe komponenty z binarnej maski"""
+        try:
+            if CV2_AVAILABLE:
+                mask_uint8 = (mask * 255).astype(np.uint8)
+                num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(mask_uint8, connectivity=4)
+                mask_cleaned = np.zeros_like(mask, dtype=np.uint8)
+                
+                for i in range(1, num_labels):
+                    area = stats[i, cv2.CC_STAT_AREA]
+                    if area >= min_size:
+                        mask_cleaned[labels == i] = 1
+                
+                return mask_cleaned
+            else:
+                return mask
+        except Exception as e:
+            logger.warning(f"Error removing small components: {e}")
+            return mask
+    
+    def _smooth_mask(self, mask: np.ndarray, method: str = 'morphology', kernel_size: int = 3) -> np.ndarray:
+        """Wygładź maskę"""
+        if not CV2_AVAILABLE or method == 'none':
+            return mask
+        
+        try:
+            mask_uint8 = (mask * 255).astype(np.uint8)
+            if method == 'morphology':
+                kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (kernel_size, kernel_size))
+                smoothed = cv2.morphologyEx(mask_uint8, cv2.MORPH_CLOSE, kernel)
+                smoothed = cv2.morphologyEx(smoothed, cv2.MORPH_OPEN, kernel)
+                return (smoothed > 128).astype(np.float32)
+            elif method == 'gaussian':
+                smoothed = cv2.GaussianBlur(mask_uint8, (kernel_size, kernel_size), 0)
+                return (smoothed > 128).astype(np.float32)
+            else:
+                return mask
+        except Exception as e:
+            logger.warning(f"Error smoothing mask: {e}")
+            return mask
+    
+    def _smooth_contour(self, contour, method: str = 'approx', **kwargs):
+        """Wygładź kontur"""
+        if not CV2_AVAILABLE or method == 'none':
+            return contour
+        
+        try:
+            if method == 'approx':
+                epsilon = kwargs.get('epsilon_factor', 0.0002) * cv2.arcLength(contour, True)
+                return cv2.approxPolyDP(contour, epsilon, True)
+            elif method == 'gaussian':
+                window_size = kwargs.get('window_size', 3)
+                if len(contour) < window_size:
+                    return contour
+                contour_2d = contour.reshape(-1, 2).astype(np.float32)
+                n_points = len(contour_2d)
+                smoothed_points = np.zeros_like(contour_2d)
+                
+                for i in range(n_points):
+                    window_points = []
+                    for j in range(-window_size//2, window_size//2 + 1):
+                        idx = (i + j) % n_points
+                        window_points.append(contour_2d[idx])
+                    smoothed_points[i] = np.mean(window_points, axis=0)
+                
+                return smoothed_points.astype(np.int32).reshape(-1, 1, 2)
+            return contour
+        except Exception as e:
+            logger.warning(f"Error smoothing contour: {e}")
+            return contour
+    
+    def _mask_to_polygons(self, mask: np.ndarray, original_width: int, original_height: int, min_area: int = 100) -> List[List[List[float]]]:
+        """Konwertuj maskę binarną na listę polygonów"""
+        try:
+            polygons = []
+            
+            if self.smooth_mask_method != 'none':
+                mask = self._smooth_mask(mask, method=self.smooth_mask_method, kernel_size=3)
+            
+            if CV2_AVAILABLE:
+                mask_uint8 = (mask * 255).astype(np.uint8)
+                contours, _ = cv2.findContours(mask_uint8, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+                
+                for contour in contours:
+                    area = cv2.contourArea(contour)
+                    if area < min_area:
+                        continue
+                    
+                    if self.polygon_detail_level == 'ultra':
+                        epsilon_factor = 0.00005
+                        max_points = 200
+                    elif self.polygon_detail_level == 'high':
+                        epsilon_factor = 0.0002
+                        max_points = 100
+                    elif self.polygon_detail_level == 'medium':
+                        epsilon_factor = 0.0005
+                        max_points = 50
+                    else:
+                        epsilon_factor = 0.001
+                        max_points = 30
+                    
+                    if self.smooth_contour_method != 'none':
+                        if self.smooth_contour_method == 'approx':
+                            contour = self._smooth_contour(contour, method='approx', epsilon_factor=epsilon_factor)
+                        elif self.smooth_contour_method == 'gaussian':
+                            contour = self._smooth_contour(contour, method='gaussian', window_size=3)
+                    
+                    if len(contour) > max_points:
+                        step = len(contour) // max_points
+                        contour = contour[::step]
+                    
+                    polygon_points = []
+                    for point in contour:
+                        try:
+                            if len(point.shape) == 3 and point.shape[0] == 1:
+                                x, y = point[0]
+                            elif len(point.shape) == 2 and point.shape[0] == 1:
+                                x, y = point[0]
+                            elif len(point.shape) == 1 and len(point) == 2:
+                                x, y = point
+                            else:
+                                continue
+                            
+                            x_pct = float((x / original_width) * 100)
+                            y_pct = float((y / original_height) * 100)
+                            polygon_points.append([x_pct, y_pct])
+                        except Exception:
+                            continue
+                    
+                    if len(polygon_points) >= 3:
+                        polygons.append(polygon_points)
+            else:
+                y_coords, x_coords = np.where(mask > 0)
+                if len(x_coords) > 0 and len(y_coords) > 0:
+                    x_min, x_max = float(x_coords.min()), float(x_coords.max())
+                    y_min, y_max = float(y_coords.min()), float(y_coords.max())
+                    
+                    polygon_points = [
+                        [float((x_min / original_width) * 100), float((y_min / original_height) * 100)],
+                        [float((x_max / original_width) * 100), float((y_min / original_height) * 100)],
+                        [float((x_max / original_width) * 100), float((y_max / original_height) * 100)],
+                        [float((x_min / original_width) * 100), float((y_max / original_height) * 100)]
+                    ]
+                    polygons.append(polygon_points)
+            
+            return polygons
+        except Exception as e:
+            logger.error(f"Error converting mask to polygons: {e}")
+            return []
+    
+    def _mask_to_rle(self, mask: np.ndarray) -> List[int]:
+        """
+        Konwertuj maskę binarną do RLE dla Label Studio używając oficjalnej funkcji.
+        """
+        try:
+            from label_studio_converter import brush
+            # Maska musi mieć wartości 0 lub 255
+            mask_255 = (mask > 0.5).astype(np.uint8) * 255
+            rle = brush.mask2rle(mask_255)
+            return rle
+        except ImportError:
+            logger.warning("label_studio_converter not available, using fallback RLE")
+            # Fallback - ręczna implementacja
+            if mask.dtype != np.uint8:
+                mask_binary = (mask > 0.5).astype(np.uint8)
+            else:
+                mask_binary = (mask > 0).astype(np.uint8)
+            
+            # Label Studio wymaga column-major order
+            flat_mask = mask_binary.flatten(order='F')
+            
+            # COCO counts format
+            counts = []
+            current_val = 0
+            count = 0
+            
+            for val in flat_mask:
+                if val == current_val:
+                    count += 1
+                else:
+                    counts.append(count)
+                    count = 1
+                    current_val = val
+            counts.append(count)
+            
+            return [int(c) for c in counts]
+    
+    def predict(self, tasks: List[Dict], context: Optional[Dict] = None, **kwargs):
+        """Główna funkcja predykcji dla Label Studio"""
+        logger.info(f"Received {len(tasks)} tasks for Segformer prediction")
+        
+        if self.model is None or self.processor is None:
+            logger.error("Segformer model or processor not loaded")
+            return [{'result': [], 'score': 0.0, 'model_version': self.get_model_version_str()} for _ in tasks]
+        
+        predictions = []
+        
+        for task in tasks:
+            try:
+                image = self._get_image_from_task(task)
+                # Upewnij się, że obraz jest w trybie RGB
+                if image.mode != 'RGB':
+                    logger.info(f"Converting image from {image.mode} to RGB")
+                    image = image.convert('RGB')
+                logger.info(f"Processing image: size={image.size}, mode={image.mode}")
+                
+                # Predykcja używając Segformer
+                logger.info(f"Running Segformer inference with: use_clahe={self.use_clahe}, use_denoise={self.use_denoise}, "
+                           f"background_threshold={self.background_threshold}, vessel_threshold={self.vessel_threshold}")
+                
+                pred_mask, probs = predict_pil_image_with_thresholding(
+                    model=self.model,
+                    image=image,
+                    processor=self.processor,
+                    device=self.device,
+                    return_probs=True,
+                    use_threshold=True,
+                    background_threshold=self.background_threshold,
+                    vessel_threshold=self.vessel_threshold,
+                    use_denoise=self.use_denoise,
+                    denoise_method=self.denoise_method,
+                    use_clahe=self.use_clahe,
+                    clahe_space=self.clahe_space,
+                    clahe_clip=self.clahe_clip,
+                    clahe_grid=self.clahe_grid
+                )
+                
+                # Konwertuj tensor na numpy - zachowaj pełną maskę multiclass
+                if isinstance(pred_mask, torch.Tensor):
+                    pred_mask_np = pred_mask.numpy().astype(np.uint8)
+                else:
+                    pred_mask_np = pred_mask.astype(np.uint8)
+                
+                logger.info(f"Prediction mask shape: {pred_mask_np.shape}, unique values: {np.unique(pred_mask_np).tolist()}")
+                
+                # DEBUG: Zapisz maskę do pliku PNG dla weryfikacji
+                try:
+                    debug_mask_path = '/app/image/debug_mask.png'
+                    # Skaluj wartości maski do 0-255 dla wizualizacji (unikaj overflow)
+                    mask_vis = ((pred_mask_np.astype(np.int32) * 10) % 256).astype(np.uint8)
+                    Image.fromarray(mask_vis).save(debug_mask_path)
+                    logger.info(f"DEBUG: Saved prediction mask to {debug_mask_path}")
+                except Exception as e:
+                    logger.warning(f"DEBUG: Could not save mask: {e}")
+                
+                # Przeskaluj maskę multiclass do oryginalnego rozmiaru
+                # PIL Image.size zwraca (width, height)
+                original_width, original_height = image.size
+                logger.info(f"Image dimensions: width={original_width}, height={original_height}")
+                
+                if CV2_AVAILABLE:
+                    mask_multiclass_resized = cv2.resize(
+                        pred_mask_np,
+                        (original_width, original_height),
+                        interpolation=cv2.INTER_NEAREST
+                    ).astype(np.uint8)
+                else:
+                    mask_pil = Image.fromarray(pred_mask_np, mode='L')
+                    mask_multiclass_resized = np.array(mask_pil.resize((original_width, original_height), Image.NEAREST)).astype(np.uint8)
+                
+                # Oblicz confidence z probs
+                if isinstance(probs, torch.Tensor):
+                    probs_np = probs.numpy()
+                else:
+                    probs_np = probs
+                
+                # Dla multiclass: utwórz RLE dla każdej klasy osobno
+                results = []
+                
+                # Loguj unikalne klasy w masce
+                unique_classes = np.unique(mask_multiclass_resized)
+                logger.info(f"Unique classes in mask: {unique_classes.tolist()}")
+                logger.info(f"Mask shape: {mask_multiclass_resized.shape}, dtype: {mask_multiclass_resized.dtype}")
+                
+                # Iteruj przez wszystkie klasy (pomijając tło = klasa 0)
+                for class_id in range(1, self.num_classes):
+                    # Utwórz binarną maskę dla tej klasy
+                    class_mask = (mask_multiclass_resized == class_id).astype(np.float32)
+                    
+                    # Usuń małe komponenty
+                    class_mask_clean = self._remove_small_components(
+                        class_mask,
+                        min_size=self.min_component_size
+                    )
+                    
+                    # Sprawdź czy są jakieś piksele tej klasy
+                    if class_mask_clean.sum() == 0:
+                        continue
+                    
+                    # Konwertuj na RLE (lista liczb, column-major order)
+                    rle = self._mask_to_rle(class_mask_clean)
+                    
+                    # Loguj RLE dla debugowania
+                    logger.debug(f"RLE for class {class_id}: counts length: {len(rle)}, first 10: {rle[:10]}")
+                    
+                    # Pobierz confidence dla tej klasy
+                    if class_id < probs_np.shape[0]:
+                        class_confidence = float(probs_np[class_id, :, :].max())
+                    else:
+                        class_confidence = 0.5
+                    
+                    # Określ nazwę klasy - class_id jest 1-based (1..num_classes-1), label_schema_classes jest 0-based
+                    prediction_class = None
+                    if self.label_schema_classes and len(self.label_schema_classes) > 0:
+                        # Spróbuj znaleźć klasę po indeksie (class_id - 1)
+                        idx = class_id - 1
+                        if 0 <= idx < len(self.label_schema_classes):
+                            prediction_class = self.label_schema_classes[idx]
+                            logger.debug(f"Segformer: Class {class_id} mapped to '{prediction_class}' from schema index {idx}")
+                        else:
+                            # Jeśli indeks poza zakresem, użyj numeru klasy jako string (może być w Label Studio)
+                            prediction_class = str(class_id)
+                            logger.debug(f"Segformer: Class {class_id} index {idx} out of range (schema has {len(self.label_schema_classes)} classes), using '{prediction_class}'")
+                    else:
+                        # Jeśli nie ma schematu, użyj numeru klasy jako string (Label Studio używa wartości jako stringi)
+                        prediction_class = str(class_id)
+                        logger.debug(f"Segformer: No schema classes, using class_id as string: '{prediction_class}'")
+                    
+                    if not prediction_class or prediction_class.strip() == '':
+                        prediction_class = str(class_id)
+                    
+                    logger.info(f"Segformer: Class {class_id} -> '{prediction_class}' (RLE length: {len(rle)}, mask pixels: {int(class_mask_clean.sum())})")
+                    
+                    # Utwórz wynik w formacie RLE dla Label Studio (zawsze brushlabels)
+                    # WAŻNE: Label Studio wymaga:
+                    # - id: unikalny identyfikator regionu
+                    # - original_width, original_height: wymiary obrazu
+                    # - image_rotation: rotacja obrazu (zwykle 0)
+                    # - value.format: 'rle'
+                    # - value.rle: tablica [start, length, start, length, ...]
+                    # - value.brushlabels: lista etykiet
+                    result_type = 'brushlabels'
+                    result_value = {
+                        'format': 'rle',
+                        'rle': rle,
+                        'brushlabels': [prediction_class]
+                    }
+                    
+                    result = {
+                        'id': str(uuid.uuid4())[:8],  # Unikalny ID dla regionu
+                        'from_name': self.from_name,
+                        'to_name': self.to_name,
+                        'type': result_type,
+                        'original_width': original_width,
+                        'original_height': original_height,
+                        'image_rotation': 0,
+                        'value': result_value
+                    }
+                    results.append(result)
+                
+                # Oblicz ogólny confidence (max z wszystkich klas)
+                if self.num_classes > 2:
+                    vessel_probs = probs_np[1:, :, :]
+                    overall_confidence = float(vessel_probs.max())
+                else:
+                    overall_confidence = float(probs_np[1, :, :].max()) if probs_np.shape[0] > 1 else 0.5
+                
+                if len(results) > 0:
+                    prediction = {
+                        'result': results,
+                        'score': overall_confidence,
+                        'model_version': self.get_model_version_str()
+                    }
+                else:
+                    prediction = {
+                        'result': [],
+                        'score': overall_confidence,
+                        'model_version': self.get_model_version_str()
+                    }
+                
+                predictions.append(prediction)
+                total_positive_pixels = (mask_multiclass_resized > 0).sum()
+                logger.info(f"Segformer prediction completed - confidence: {overall_confidence:.4f}, "
+                           f"classes found: {len(results)}, total positive pixels: {total_positive_pixels}")
+                
+                # Loguj przykładowy wynik dla debugowania
+                if results:
+                    sample_result = results[0]
+                    logger.info(f"Sample result: id={sample_result.get('id')}, from_name={sample_result.get('from_name')}, "
+                               f"to_name={sample_result.get('to_name')}, type={sample_result.get('type')}, "
+                               f"original_width={sample_result.get('original_width')}, original_height={sample_result.get('original_height')}")
+                    logger.info(f"Sample value: format={sample_result['value'].get('format')}, "
+                               f"brushlabels={sample_result['value'].get('brushlabels')}, rle_len={len(sample_result['value'].get('rle', []))}")
+                
+            except Exception as e:
+                logger.error(f"Error in Segformer prediction: {e}")
+                import traceback
+                traceback.print_exc()
+                
+                predictions.append({
+                    'result': [],
+                    'score': 0.0,
+                    'model_version': self.get_model_version_str()
+                })
+        
+        return predictions
+    
+    def fit(self, event, data, **kwargs):
+        """Placeholder dla trenowania modelu"""
+        logger.info(f"Fit called with event: {event}")
+        pass
+    
+    def get_model_info(self) -> Dict[str, Any]:
+        """Zwróć informacje o modelu"""
+        return {
+            'model_type': self.model_type,
+            'model_size': self.model_size,
+            'model_path': self.model_path,
+            'resolution': self.resolution,
+            'num_classes': self.num_classes,
+            'background_threshold': self.background_threshold,
+            'vessel_threshold': self.vessel_threshold,
+            'device': str(self.device),
+            'model_loaded': self.model is not None,
+            'processor_loaded': self.processor is not None,
+            'use_clahe': self.use_clahe,
+            'use_denoise': self.use_denoise,
+            'classes': self.label_schema_classes or ['coronary_artery']
         }
 
 

@@ -47,7 +47,7 @@ else:
     device = torch.device("cpu")
     print("GPU niedostępne, używamy CPU")
 
-print(f"🔧 Device: {device}")
+print(f" Device: {device}")
 path = '/home/ives/rafal/notebooks/data'
 
 

@@ -31,7 +31,7 @@ logging.config.dictConfig({
 })
 
 from label_studio_ml.api import init_app
-from model import CoronarySegmentationModel
+from model import CoronarySegmentationModel, SegFormerSegmentationModel
 
 logger = logging.getLogger(__name__)
 
@@ -111,7 +111,9 @@ def auto_discover_models(models_dir):
         model_type = 'attention_resunet'  # domyślny
         name_lower = model_name.lower()
         
-        if 'deep_resunet' in name_lower or 'deepresunet' in name_lower:
+        if 'segformer' in name_lower:
+            model_type = 'segformer'
+        elif 'deep_resunet' in name_lower or 'deepresunet' in name_lower:
             model_type = 'deep_resunet'
         elif 'attention_resunet' in name_lower or 'attentionresunet' in name_lower or 'attention' in name_lower:
             model_type = 'attention_resunet'
@@ -155,12 +157,21 @@ def auto_discover_models(models_dir):
 def create_model_wrapper_class(model_name, model_config):
     """Stwórz wrapper klasę dla konkretnego modelu"""
     
-    class ModelWrapper(CoronarySegmentationModel):
+    model_type = model_config.get('model_type', 'attention_resunet')
+    
+    # Wybierz klasę bazową w zależności od typu modelu
+    if model_type == 'segformer':
+        BaseModelClass = SegFormerSegmentationModel
+    else:
+        BaseModelClass = CoronarySegmentationModel
+    
+    class ModelWrapper(BaseModelClass):
         def __init__(self, **kwargs):
             # Debug: sprawdź co jest przekazywane
-            logger.info(f"🔍 ModelWrapper.__init__ for {model_name}:")
+            logger.info(f"   ModelWrapper.__init__ for {model_name}:")
             logger.info(f"   kwargs: {kwargs}")
             logger.info(f"   model_config: {model_config}")
+            logger.info(f"   base_model_class: {BaseModelClass.__name__}")
             
             # Połącz model_config z kwargs, gdzie model_config ma priorytet
             # Ale usuń parametry specyficzne dla modelu z kwargs przekazywanych do klasy bazowej
@@ -219,9 +230,9 @@ def create_multi_endpoint_app(models_config, **flask_kwargs):
                 **flask_kwargs_clean
             )
             
-            logger.info(f"🔍 Created Flask app for {model_name}: {model_app}")
-            logger.info(f"🔍 Flask app ID: {id(model_app)}")
-            logger.info(f"🔍 Flask app name: {model_app.name if hasattr(model_app, 'name') else 'No name'}")
+            logger.info(f" Created Flask app for {model_name}: {model_app}")
+            logger.info(f" Flask app ID: {id(model_app)}")
+            logger.info(f" Flask app name: {model_app.name if hasattr(model_app, 'name') else 'No name'}")
             
             model_apps[model_name] = {
                 'app': model_app,
@@ -229,10 +240,10 @@ def create_multi_endpoint_app(models_config, **flask_kwargs):
                 'config': model_config
             }
             
-            logger.info(f"✅ Model '{model_name}' initialized for endpoint '{endpoint}'")
+            logger.info(f" Model '{model_name}' initialized for endpoint '{endpoint}'")
             
         except Exception as e:
-            logger.error(f"❌ Failed to initialize model '{model_name}': {e}")
+            logger.error(f" Failed to initialize model '{model_name}': {e}")
             import traceback
             traceback.print_exc()
     
@@ -275,12 +286,35 @@ def create_multi_endpoint_app(models_config, **flask_kwargs):
             "timestamp": os.popen('date').read().strip()
         })
     
+    # Dodaj dedykowany health check dla każdego modelu
+    for model_name, model_data in model_apps.items():
+        endpoint = model_data['endpoint']
+        if endpoint != "/":
+            endpoint_clean = endpoint.rstrip('/')
+            
+            # Użyj closure z unikalną nazwą funkcji
+            def make_health_check_handler(m_name, m_endpoint):
+                """Tworzy handler health check dla konkretnego modelu"""
+                def health_check_handler():
+                    """Health check endpoint dla konkretnego modelu"""
+                    return jsonify({
+                        "status": "healthy",
+                        "model": m_name,
+                        "endpoint": m_endpoint,
+                        "timestamp": os.popen('date').read().strip()
+                    })
+                health_check_handler.__name__ = f'{m_name}_health_check'
+                return health_check_handler
+            
+            handler = make_health_check_handler(model_name, endpoint)
+            app.add_url_rule(f'{endpoint_clean}/health', f'{model_name}_health_check', handler, methods=['GET'])
+    
     # Routing dla każdego modelu
     for model_name, model_data in model_apps.items():
         model_app_instance = model_data['app']
         endpoint = model_data['endpoint']
-        
-        logger.info(f"🔗 Setting up routing: Model '{model_name}' -> endpoint '{endpoint}'")
+    
+        logger.info(f" Setting up routing: Model '{model_name}' -> endpoint '{endpoint}'")
         
         # Define the model_view function directly inside the loop
         # This ensures that 'model_app_instance', 'model_name', and 'endpoint'
@@ -288,15 +322,15 @@ def create_multi_endpoint_app(models_config, **flask_kwargs):
         def model_view_closure(path='', current_model_app=model_app_instance, current_model_name=model_name, current_endpoint=endpoint):
             from flask import request as flask_request
             
-            logger.info(f"🔄 Routing request to model: {current_model_name}, endpoint: {current_endpoint}, path: {flask_request.path}")
-            logger.info(f"🔍 Current model app ID: {id(current_model_app)}")
-            logger.info(f"🔍 Current model app name: {current_model_app.name if hasattr(current_model_app, 'name') else 'No name'}")
+            logger.info(f" Routing request to model: {current_model_name}, endpoint: {current_endpoint}, path: {flask_request.path}")
+            logger.info(f" Current model app ID: {id(current_model_app)}")
+            logger.info(f" Current model app name: {current_model_app.name if hasattr(current_model_app, 'name') else 'No name'}")
             
             new_path = flask_request.path.replace(current_endpoint.rstrip('/'), '') or '/'
             headers_dict = dict(flask_request.headers)
             
-            logger.info(f"🔍 Using Flask app instance: {current_model_app}")
-            logger.info(f"🔍 Request path: {flask_request.path} -> {new_path}")
+            logger.info(f" Using Flask app instance: {current_model_app}")
+            logger.info(f" Request path: {flask_request.path} -> {new_path}")
             
             with current_model_app.test_request_context(
                 path=new_path,
