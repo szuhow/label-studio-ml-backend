@@ -1563,25 +1563,38 @@ class SegFormerSegmentationModel(LabelStudioMLBase):
                     else:
                         class_confidence = 0.5
                     
-                    # Określ nazwę klasy - class_id jest 1-based (1..num_classes-1), label_schema_classes jest 0-based
-                    prediction_class = None
-                    if self.label_schema_classes and len(self.label_schema_classes) > 0:
-                        # Spróbuj znaleźć klasę po indeksie (class_id - 1)
-                        idx = class_id - 1
-                        if 0 <= idx < len(self.label_schema_classes):
-                            prediction_class = self.label_schema_classes[idx]
-                            logger.debug(f"Segformer: Class {class_id} mapped to '{prediction_class}' from schema index {idx}")
-                        else:
-                            # Jeśli indeks poza zakresem, użyj numeru klasy jako string (może być w Label Studio)
-                            prediction_class = str(class_id)
-                            logger.debug(f"Segformer: Class {class_id} index {idx} out of range (schema has {len(self.label_schema_classes)} classes), using '{prediction_class}'")
-                    else:
-                        # Jeśli nie ma schematu, użyj numeru klasy jako string (Label Studio używa wartości jako stringi)
-                        prediction_class = str(class_id)
-                        logger.debug(f"Segformer: No schema classes, using class_id as string: '{prediction_class}'")
+                    # Mapowanie class_id na etykiety Label Studio (format "N: nazwa")
+                    CLASS_ID_TO_LABEL = {
+                        1: "1: RCA prox",
+                        2: "2: RCA mid",
+                        3: "3: RCA dist",
+                        4: "4: PDA",
+                        5: "5: LM",
+                        6: "6: LAD prox",
+                        7: "7: LAD mid",
+                        8: "8: LAD apical",
+                        9: "9: D1",
+                        10: "10: D1 branch (9a)",
+                        11: "11: D2",
+                        12: "12: D2 branch (10a)",
+                        13: "13: LCx prox (11)",
+                        14: "14: OM1 (12)",
+                        15: "15: OM1 branch (12a)",
+                        16: "16: LCx mid (13)",
+                        17: "17: OM2 (14)",
+                        18: "18: OM2 branch (14a)",
+                        19: "19: LCx dist (15)",
+                        20: "20: PLB (16)",
+                        21: "21: PLB branch (16a)",
+                        22: "22: PLB branch (16b)",
+                        23: "23: PLB branch (16c)",
+                        24: "24: OM1 branch (12b)",
+                        25: "25: OM2 branch (14b)",
+                        26: "26: stenosis",
+                    }
                     
-                    if not prediction_class or prediction_class.strip() == '':
-                        prediction_class = str(class_id)
+                    # Użyj mapowania lub fallback na "class_id: unknown"
+                    prediction_class = CLASS_ID_TO_LABEL.get(class_id, f"{class_id}: unknown")
                     
                     logger.info(f"Segformer: Class {class_id} -> '{prediction_class}' (RLE length: {len(rle)}, mask pixels: {int(class_mask_clean.sum())})")
                     
