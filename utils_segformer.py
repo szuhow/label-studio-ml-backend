@@ -2,7 +2,7 @@ import os
 import pickle
 from typing import Any, Dict, Optional, Tuple
 import torch
-from transformers import SegformerForSemanticSegmentation, SegformerImageProcessor
+from transformers import SegformerForSemanticSegmentation, SegformerImageProcessor, SegformerConfig
 import matplotlib.pyplot as plt
 from glob import glob
 from PIL import Image
@@ -162,35 +162,33 @@ def load_model_for_inference_from_checkpoint(
     id2label = {v: k for k, v in label2id.items()}
     print(f"id2label: {id2label}")
     
-    # Jawnie załaduj model na CPU bez żadnych optymalizacji pamięci
-    with torch.device('cpu'):
-        model = SegformerForSemanticSegmentation.from_pretrained(
-            base_model_name,
-            num_labels=num_classes,
-            id2label={k: v for v, k in id2label.items()},  # HF expects int->str
-            label2id=label2id,
-            ignore_mismatched_sizes=True,
-            return_dict=True,
-            low_cpu_mem_usage=False,
-            torch_dtype=torch.float32,
-            device_map=None,  # Wyłącz automatyczne mapowanie
-        )
+    # Pobierz konfigurację bazowego modelu i zmodyfikuj dla naszej liczby klas
+    config = SegformerConfig.from_pretrained(base_model_name)
+    config.num_labels = num_classes
+    config.id2label = {k: v for v, k in id2label.items()}
+    config.label2id = label2id
     
-    # Załaduj state_dict na CPU
+    # Utwórz model z konfiguracji (bez wstępnie wytrenowanych wag - unikamy meta tensorów)
+    print(f"Creating model from config with {num_classes} classes...")
+    model = SegformerForSemanticSegmentation(config)
+    
+    # Załaduj state_dict z checkpointu
     missing_keys, unexpected_keys = model.load_state_dict(state, strict=False)
     
     if missing_keys:
         print(f"Warning: Missing keys when loading state_dict: {len(missing_keys)} keys")
+        # Pokaż kilka brakujących kluczy
+        if len(missing_keys) <= 10:
+            print(f"  Missing: {missing_keys}")
+        else:
+            print(f"  First 10 missing: {missing_keys[:10]}")
     if unexpected_keys:
         print(f"Warning: Unexpected keys when loading state_dict: {len(unexpected_keys)} keys")
     
-    # Przenieś na docelowe urządzenie
-    if device.type == 'cuda':
-        model = model.cuda()
-    else:
-        model = model.cpu()
-    
+    # Przenieś na docelowe urządzenie i ustaw eval mode
+    model = model.to(device)
     model.eval()
+    print(f"Model loaded successfully on {device}")
     
     return model, processor
 
