@@ -1177,24 +1177,6 @@ class SegFormerSegmentationModel(LabelStudioMLBase):
     
     def _get_image_from_task(self, task: Dict) -> Image.Image:
         """Pobierz obraz z zadania Label Studio (obsługuje lokalne pliki i CloudFront URLs)"""
-        # DEBUG: Zahardkodowany obraz testowy
-        # Sprawdź najpierw w kontenerze Docker, potem na hoście
-        debug_image_paths = [
-            '/app/image/1.png',  # W kontenerze Docker
-            '/home/rafal/Dokumenty/ivessystem/coronary/label-studio-ml-backend/image/1.png'  # Na hoście
-        ]
-        for debug_image_path in debug_image_paths:
-            if os.path.exists(debug_image_path):
-                logger.warning(f"DEBUG MODE: Using hardcoded test image: {debug_image_path}")
-                img = Image.open(debug_image_path)
-                logger.info(f"DEBUG IMAGE LOADED: path={debug_image_path}, size={img.size}, mode={img.mode}")
-                # Loguj statystyki obrazu
-                import numpy as np
-                img_array = np.array(img)
-                logger.info(f"DEBUG IMAGE STATS: shape={img_array.shape}, dtype={img_array.dtype}, "
-                           f"min={img_array.min()}, max={img_array.max()}, mean={img_array.mean():.2f}")
-                return img
-        
         image_key = self.value if self.value else 'image'
         possible_keys = [image_key, 'image', 'data', 'url']
         image_url = None
