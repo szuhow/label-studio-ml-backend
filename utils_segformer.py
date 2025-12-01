@@ -161,19 +161,22 @@ def load_model_for_inference_from_checkpoint(
     
     id2label = {v: k for k, v in label2id.items()}
     print(f"id2label: {id2label}")
-    # Utwórz model na CPU z wyłączonym low_cpu_mem_usage, żeby uniknąć meta tensorów
-    model = SegformerForSemanticSegmentation.from_pretrained(
-        base_model_name,
-        num_labels=num_classes,
-        id2label={k: v for v, k in id2label.items()},  # HF expects int->str
-        label2id=label2id,
-        ignore_mismatched_sizes=True,
-        return_dict=True,
-        low_cpu_mem_usage=False,  # Unikaj meta tensorów
-        torch_dtype=torch.float32,  # Jawnie określ typ danych
-    )
     
-    # Załaduj state_dict na CPU (model jest jeszcze na CPU)
+    # Jawnie załaduj model na CPU bez żadnych optymalizacji pamięci
+    with torch.device('cpu'):
+        model = SegformerForSemanticSegmentation.from_pretrained(
+            base_model_name,
+            num_labels=num_classes,
+            id2label={k: v for v, k in id2label.items()},  # HF expects int->str
+            label2id=label2id,
+            ignore_mismatched_sizes=True,
+            return_dict=True,
+            low_cpu_mem_usage=False,
+            torch_dtype=torch.float32,
+            device_map=None,  # Wyłącz automatyczne mapowanie
+        )
+    
+    # Załaduj state_dict na CPU
     missing_keys, unexpected_keys = model.load_state_dict(state, strict=False)
     
     if missing_keys:
@@ -181,11 +184,13 @@ def load_model_for_inference_from_checkpoint(
     if unexpected_keys:
         print(f"Warning: Unexpected keys when loading state_dict: {len(unexpected_keys)} keys")
     
-    # Teraz przenieś model na device (wszystkie tensory są już załadowane, nie ma meta tensorów)
-    model = model.to(device)
+    # Przenieś na docelowe urządzenie
+    if device.type == 'cuda':
+        model = model.cuda()
+    else:
+        model = model.cpu()
     
-    # Ustaw w tryb eval
-    model = model.eval()
+    model.eval()
     
     return model, processor
 
