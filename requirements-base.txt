@@ -9,3 +9,4 @@ label-studio-ml
 matplotlib
 torchvision
 tensorboard
+label_studio_converter

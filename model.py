@@ -1419,8 +1419,12 @@ class SegFormerSegmentationModel(LabelStudioMLBase):
         from label_studio_converter import brush
         
         mask_255 = (mask > 0.5).astype(np.uint8) * 255
+        logger.info(f"RLE input mask: shape={mask_255.shape}, dtype={mask_255.dtype}, "
+                   f"unique={np.unique(mask_255).tolist()}, sum={mask_255.sum()}")
+        
         rle = brush.mask2rle(mask_255)
-        logger.debug(f"RLE generated using label_studio_converter.brush, length: {len(rle)}")
+        logger.info(f"RLE output: type={type(rle)}, len={len(rle) if hasattr(rle, '__len__') else 'N/A'}, "
+                   f"first_10={rle[:10] if hasattr(rle, '__getitem__') else rle}")
         return rle
     
     def predict(self, tasks: List[Dict], context: Optional[Dict] = None, **kwargs):
