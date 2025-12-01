@@ -1414,40 +1414,14 @@ class SegFormerSegmentationModel(LabelStudioMLBase):
     
     def _mask_to_rle(self, mask: np.ndarray) -> List[int]:
         """
-        Konwertuj maskę binarną do RLE dla Label Studio używając oficjalnej funkcji.
+        Konwertuj maskę binarną do RLE dla Label Studio.
         """
-        try:
-            from label_studio_converter import brush
-            # Maska musi mieć wartości 0 lub 255
-            mask_255 = (mask > 0.5).astype(np.uint8) * 255
-            rle = brush.mask2rle(mask_255)
-            return rle
-        except ImportError:
-            logger.warning("label_studio_converter not available, using fallback RLE")
-            # Fallback - ręczna implementacja
-            if mask.dtype != np.uint8:
-                mask_binary = (mask > 0.5).astype(np.uint8)
-            else:
-                mask_binary = (mask > 0).astype(np.uint8)
-            
-            # Label Studio wymaga column-major order
-            flat_mask = mask_binary.flatten(order='F')
-            
-            # COCO counts format
-            counts = []
-            current_val = 0
-            count = 0
-            
-            for val in flat_mask:
-                if val == current_val:
-                    count += 1
-                else:
-                    counts.append(count)
-                    count = 1
-                    current_val = val
-            counts.append(count)
-            
-            return [int(c) for c in counts]
+        from label_studio_converter import brush
+        
+        mask_255 = (mask > 0.5).astype(np.uint8) * 255
+        rle = brush.mask2rle(mask_255)
+        logger.debug(f"RLE generated using label_studio_converter.brush, length: {len(rle)}")
+        return rle
     
     def predict(self, tasks: List[Dict], context: Optional[Dict] = None, **kwargs):
         """Główna funkcja predykcji dla Label Studio"""
@@ -1490,6 +1464,7 @@ class SegFormerSegmentationModel(LabelStudioMLBase):
                 )
                 
                 # Konwertuj tensor na numpy - zachowaj pełną maskę multiclass
+                # WAŻNE: pred_mask jest JUŻ przeskalowana do oryginalnego rozmiaru w predict_pil_image_with_thresholding
                 if isinstance(pred_mask, torch.Tensor):
                     pred_mask_np = pred_mask.numpy().astype(np.uint8)
                 else:
@@ -1507,20 +1482,32 @@ class SegFormerSegmentationModel(LabelStudioMLBase):
                 except Exception as e:
                     logger.warning(f"DEBUG: Could not save mask: {e}")
                 
-                # Przeskaluj maskę multiclass do oryginalnego rozmiaru
+                # Maska jest już w oryginalnym rozmiarze - NIE skaluj ponownie!
                 # PIL Image.size zwraca (width, height)
                 original_width, original_height = image.size
                 logger.info(f"Image dimensions: width={original_width}, height={original_height}")
+                logger.info(f"Mask shape from predict: {pred_mask_np.shape} (should be {original_height}x{original_width})")
                 
-                if CV2_AVAILABLE:
-                    mask_multiclass_resized = cv2.resize(
-                        pred_mask_np,
-                        (original_width, original_height),
-                        interpolation=cv2.INTER_NEAREST
-                    ).astype(np.uint8)
+                # Walidacja wymiarów - upewnij się, że maska ma prawidłowy rozmiar
+                if pred_mask_np.shape != (original_height, original_width):
+                    logger.error(f"DIMENSION MISMATCH! Mask shape {pred_mask_np.shape} != expected ({original_height}, {original_width})")
+                    logger.error("This may cause duplicate/shifted segments! Resizing mask to correct dimensions...")
+                    
+                    # W przypadku błędu wymiarów, przeskaluj raz jeszcze
+                    if CV2_AVAILABLE:
+                        mask_multiclass_resized = cv2.resize(
+                            pred_mask_np,
+                            (original_width, original_height),
+                            interpolation=cv2.INTER_NEAREST
+                        ).astype(np.uint8)
+                    else:
+                        mask_pil = Image.fromarray(pred_mask_np, mode='L')
+                        mask_multiclass_resized = np.array(mask_pil.resize((original_width, original_height), Image.NEAREST)).astype(np.uint8)
+                    logger.info(f"Mask resized to: {mask_multiclass_resized.shape}")
                 else:
-                    mask_pil = Image.fromarray(pred_mask_np, mode='L')
-                    mask_multiclass_resized = np.array(mask_pil.resize((original_width, original_height), Image.NEAREST)).astype(np.uint8)
+                    # Wymiary się zgadzają - użyj maski bez skalowania
+                    mask_multiclass_resized = pred_mask_np
+                    logger.info("Mask dimensions correct, using mask without rescaling")
                 
                 # Oblicz confidence z probs
                 if isinstance(probs, torch.Tensor):
@@ -1541,15 +1528,25 @@ class SegFormerSegmentationModel(LabelStudioMLBase):
                     # Utwórz binarną maskę dla tej klasy
                     class_mask = (mask_multiclass_resized == class_id).astype(np.float32)
                     
+                    # Sprawdź czy są jakieś piksele tej klasy PRZED czyszczeniem
+                    if class_mask.sum() == 0:
+                        logger.debug(f"Class {class_id}: No pixels found, skipping")
+                        continue
+                    
+                    logger.debug(f"Class {class_id}: Found {int(class_mask.sum())} pixels before cleaning")
+                    
                     # Usuń małe komponenty
                     class_mask_clean = self._remove_small_components(
                         class_mask,
                         min_size=self.min_component_size
                     )
                     
-                    # Sprawdź czy są jakieś piksele tej klasy
+                    # Sprawdź czy są jakieś piksele tej klasy PO czyszczeniu
                     if class_mask_clean.sum() == 0:
+                        logger.debug(f"Class {class_id}: No pixels after component removal, skipping")
                         continue
+                    
+                    logger.debug(f"Class {class_id}: {int(class_mask_clean.sum())} pixels after cleaning")
                     
                     # Konwertuj na RLE (lista liczb, column-major order)
                     rle = self._mask_to_rle(class_mask_clean)
@@ -1618,6 +1615,7 @@ class SegFormerSegmentationModel(LabelStudioMLBase):
                         'from_name': self.from_name,
                         'to_name': self.to_name,
                         'type': result_type,
+                        'score': class_confidence,
                         'original_width': original_width,
                         'original_height': original_height,
                         'image_rotation': 0,
