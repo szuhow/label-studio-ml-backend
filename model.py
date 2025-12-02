@@ -844,6 +844,7 @@ class CoronarySegmentationModel(LabelStudioMLBase):
                             'from_name': self.from_name,
                             'to_name': self.to_name,
                             'type': result_type,
+                            'score': float(confidence),  # Dodane pole score dla confidence!
                             'value': result_value
                         }
                         results.append(result)
@@ -1540,9 +1541,16 @@ class SegFormerSegmentationModel(LabelStudioMLBase):
                     # Loguj RLE dla debugowania
                     logger.debug(f"RLE for class {class_id}: counts length: {len(rle)}, first 10: {rle[:10]}")
                     
-                    # Pobierz confidence dla tej klasy
+                    # Pobierz confidence dla tej klasy - użyj średniej z pikseli należących do klasy
                     if class_id < probs_np.shape[0]:
-                        class_confidence = float(probs_np[class_id, :, :].max())
+                        # Pobierz mapę prawdopodobieństw dla tej klasy
+                        class_probs = probs_np[class_id, :, :]
+                        # Oblicz średnią z pikseli które należą do tej klasy (mask > 0)
+                        class_mask_bool = class_mask_clean > 0
+                        if class_mask_bool.sum() > 0:
+                            class_confidence = float(class_probs[class_mask_bool].mean())
+                        else:
+                            class_confidence = float(class_probs.max())  # Fallback na max
                     else:
                         class_confidence = 0.5
                     
