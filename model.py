@@ -1579,13 +1579,14 @@ class SegFormerSegmentationModel(LabelStudioMLBase):
                     # Użyj mapowania lub fallback na "class_id: unknown"
                     prediction_class = CLASS_ID_TO_LABEL.get(class_id, f"{class_id}: unknown")
                     
-                    logger.info(f"Segformer: Class {class_id} -> '{prediction_class}' (RLE length: {len(rle)}, mask pixels: {int(class_mask_clean.sum())})")
+                    logger.info(f"Segformer: Class {class_id} -> '{prediction_class}' (RLE length: {len(rle)}, mask pixels: {int(class_mask_clean.sum())}, confidence: {class_confidence:.4f})")
                     
                     # Utwórz wynik w formacie RLE dla Label Studio (zawsze brushlabels)
                     # WAŻNE: Label Studio wymaga:
                     # - id: unikalny identyfikator regionu
                     # - original_width, original_height: wymiary obrazu
                     # - image_rotation: rotacja obrazu (zwykle 0)
+                    # - score: confidence score dla tego regionu (DODANE!)
                     # - value.format: 'rle'
                     # - value.rle: tablica [start, length, start, length, ...]
                     # - value.brushlabels: lista etykiet
@@ -1601,7 +1602,7 @@ class SegFormerSegmentationModel(LabelStudioMLBase):
                         'from_name': self.from_name,
                         'to_name': self.to_name,
                         'type': result_type,
-                        'score': class_confidence,
+                        'score': class_confidence,  # Dodane pole score dla confidence!
                         'original_width': original_width,
                         'original_height': original_height,
                         'image_rotation': 0,
